@@ -6,7 +6,7 @@
 
 - **巡检窗口**：2026-09-25 09:30~10:00（30分钟），粒度 60s
 - **覆盖范围**：8 个服务 / 15 个实例
-- **执行耗时**：5.0s
+- **执行耗时**：4.8s
 
 ### 稳定性评分
 
@@ -77,33 +77,25 @@
 
 ## 六、稳定性趋势
 
-**对比对象**：`run-20260925-100000-S2`（2026-09-25T01:18+08:00）
+**对比对象**：`run-20260925-100000-S6`（2026-09-26T03:19+08:00）
 
 - 评分变化：**+51.4 分**（较上次上升）
-- 稳定性评分较上次上升 51.4 分；新增异常 1 项、已恢复 36 项、持续未解决 0 项。
+- 稳定性评分较上次上升 51.4 分；新增异常 1 项、已恢复 4 项、持续未解决 0 项。
 
 **新增异常（1）**
 
 - [P4 轻微] order-svc/order-svc-1 内存使用率
 
-**已恢复（36）**
+**已恢复（4）**
 
-- gateway/gateway-0 latency_p99
-- gateway/gateway-1 latency_p99
-- gateway/gateway-2 latency_p99
-- inventory-svc/inventory-svc-1 latency_p99
-- order-svc/order-svc-0 latency_p99
-- order-svc/order-svc-1 latency_p99
-- order-svc/order-svc-2 latency_p99
-- gateway/gateway-0 latency_p95
-- gateway/gateway-1 latency_p95
-- gateway/gateway-2 latency_p95
-- inventory-svc/inventory-svc-1 latency_p95
-- order-svc/order-svc-0 latency_p95
+- payment-svc/payment-svc-0 mem_usage
+- payment-svc/payment-svc-1 mem_usage
+- payment-svc/payment-svc-0 mem_usage
+- payment-svc/payment-svc-1 mem_usage
 
 ### 评分历史
 
-`▃▄▆▃▁▃█`　最近 7 次：45 → 60 → 84 → 45 → 20 → 45 → 96
+`▃▆▁▃▄▃█`　最近 7 次：45 → 84 → 20 → 45 → 60 → 45 → 96
 
 ## 七、附录
 
@@ -134,14 +126,14 @@
 
 | 阶段 | 状态 | 耗时 | 说明 |
 | --- | --- | ---: | --- |
-| 数据采集 | 成功 | 699ms | file 通道采集 215676 个点 / 150 条时序（695ms） |
-| 标准化清洗 | 成功 | 2627ms | 215999 个有效点 / 150 条时序；缺失率 0.00%，置信度 高 |
-| 结构化存储 | 成功 | 209ms | 数据集 S0 就绪（215999 个指标点） |
-| 动态基线 | 成功 | 1375ms | 计算 150 条基线，动态基线覆盖率 100%（归档 603894 点） |
+| 数据采集 | 成功 | 692ms | file 通道采集 215676 个点 / 150 条时序（688ms） |
+| 标准化清洗 | 成功 | 2608ms | 215999 个有效点 / 150 条时序；缺失率 0.00%，置信度 高 |
+| 结构化存储 | 成功 | 147ms | 数据集 S0 就绪（215999 个指标点） |
+| 动态基线 | 成功 | 1241ms | 计算 150 条基线，动态基线覆盖率 100%（归档 603894 点） |
 | 规则巡检 | 成功 | 111ms | 16 条规则命中 1 项原始发现（111ms） |
 | 聚合去重 | 成功 | 2ms | 1 条异常（抑制 0 条）聚成 1 个根因簇 |
 | 稳定性评分 | 成功 | 0ms | 规则算分 96.4（A 优秀） |
 | AI 智能分析 | 降级 | 3ms | 降级运行（未配置 llm_api_key，无法调用大模型）；1 条根因结论，token 0，耗时 0ms |
-| 报告输出 | 成功 | 5ms | Markdown 报告 3560 字符，已写入 run-20260925-100000-S0.md |
+| 报告输出 | 成功 | 4ms | Markdown 报告 3286 字符，已写入 run-20260925-100000-S0.md |
 
 - AI 分析：降级运行（未配置 llm_api_key，无法调用大模型）；调用 0 次，耗时 0ms，token 0，提示词版本 v1

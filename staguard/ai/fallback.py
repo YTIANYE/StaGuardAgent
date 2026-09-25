@@ -19,6 +19,7 @@ from ..models import (
     ChangeEvent,
     Finding,
     RootCauseCategory,
+    Topology,
     TrendJudgement,
 )
 from ..utils.text import truncate
@@ -36,9 +37,15 @@ CHANGE_WINDOW_MINUTES = 30.0
 class FallbackAttributor:
     """基于证据特征的规则归因。"""
 
-    def __init__(self, changes: list[ChangeEvent] | None = None, owner_lookup=None) -> None:  # noqa: ANN001
+    def __init__(
+        self,
+        changes: list[ChangeEvent] | None = None,
+        owner_lookup=None,  # noqa: ANN001
+        topology: Topology | None = None,
+    ) -> None:
         self.changes = changes or []
         self.owner_lookup = owner_lookup
+        self.topology = topology
 
     def analyze(self, clusters: list[AnomalyCluster], reason: str) -> AIAnalysis:
         findings = [self._attribute(cluster) for cluster in clusters]
@@ -111,11 +118,23 @@ class FallbackAttributor:
             )
 
         # 3. 连接池打满 + 延时恶化 —— 典型的「下游慢拖垮上游」
+        #
+        # 但这里必须区分两种情况，否则会**陈述一个不可观测的事实**：
+        #   - 本服务有受影响的下游 → 连接被下游慢请求占住，根因在下游；
+        #   - 本服务在链路最下游（外部依赖）→ 它没有下游可指，连接打满只能来自自身。
+        # 早期版本没做这个区分，S1 场景里就对着无下游的银行渠道说
+        # 「指向其下游依赖响应退化」——这种结论审阅者一核对拓扑就会发现站不住脚。
         if rid == "RES-04" and ({"PERF-01", "PERF-02"} & rules):
+            if self._affected_downstream(primary.service, cluster.services):
+                return (
+                    RootCauseCategory.DEPENDENCY_FAILURE,
+                    f"{primary.service} 连接池被慢请求占满且延时同步恶化，"
+                    "指向其下游依赖响应退化而非自身容量不足",
+                )
             return (
-                RootCauseCategory.DEPENDENCY_FAILURE,
-                f"{primary.service} 连接池被慢请求占满且延时同步恶化，"
-                "指向其下游依赖响应退化而非自身容量不足",
+                RootCauseCategory.RESOURCE_BOTTLENECK,
+                f"{primary.service} 处于链路最下游（无更下游依赖可归因），"
+                "连接池打满与延时恶化只能来自其自身处理能力或对接额度不足",
             )
 
         # 4. CPU / 内存 / 连接水位越线 —— 资源瓶颈
@@ -162,6 +181,17 @@ class FallbackAttributor:
                 f"{primary.service} 出现成功率劣化，但缺少资源、依赖、变更等定位性证据",
             )
         return RootCauseCategory.UNKNOWN, f"{primary.service} 的 {primary.metric.label} 异常，证据不足以定性"
+
+    def _affected_downstream(self, service: str, services: list[str]) -> list[str]:
+        """在本次异常涉及的服务里，找出本服务的下游。
+
+        只看「受影响的下游」而不是「拓扑上的下游」：一个下游服务如果本次没报警，
+        就说明它没被拖垮，把根因推给它属于臆断。
+        """
+        if self.topology is None:
+            return []
+        others = set(services) - {service}
+        return sorted(others & set(self.topology.descendants(service)))
 
     def _recent_change(self, cluster: AnomalyCluster) -> ChangeEvent | None:
         services = set(cluster.services) | {cluster.primary.service}

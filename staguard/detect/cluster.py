@@ -191,7 +191,17 @@ def _pick_primary(group: list[Anomaly], topology: Topology, services: list[str])
             + SCORE_WEIGHTS["earliest"] * earliest_score
         )
 
-    return max(candidates, key=lambda a: (score(a), -int(a.level), a.anomaly_id))
+    # **先比严重度，同级之间再比加权分数。**
+    #
+    # 曾经用纯加权分数取最大值，结果在 S4 场景上翻了车：
+    # 入口网关一条「成功率略低于 SLO」的 P4（流量天然波动导致的噪声）
+    # 因为「越靠上游越像根因」拿满了方向分，压过了真正出故障的
+    # user-svc 上那条 P2 业务错误率——根因被定位到了完全无辜的服务上。
+    #
+    # 严重度优先在直觉上也更站得住：一个 P3 级的下游问题，
+    # 解释不了上游的 P1 崩溃；而最严重的那个异常，本身就是最值得优先解释的对象。
+    # 同级之间的排序才需要方向、时序这些细腻的信号。
+    return min(candidates, key=lambda a: (a.level, -score(a), a.anomaly_id))
 
 
 def _depth_norm(service: str, services: list[str], topology: Topology) -> float:

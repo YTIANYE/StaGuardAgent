@@ -77,7 +77,12 @@ class AppConfig(BaseSettings):
     llm_max_attempts: int = 2
     llm_temperature: float = 0.2
     llm_max_concurrency: int = 3
-    llm_max_tokens: int = 2048
+    llm_max_tokens: int = 4096
+    """单次输出上限。
+
+    实测教训：2048 在「一个簇里塞了 50 条异常」的场景下会被截断，
+    表现为 JSON 解析失败——而且报错信息看起来像「模型格式不稳定」，
+    很容易把人引向调提示词这种错误方向。代价只有几毛钱，留足余量。"""
 
     # ---- 告警 ----
     alert_webhook_url: str | None = None

@@ -373,12 +373,34 @@ class Repository:
             if rows:
                 conn.execute(insert(clusters), rows)
 
-    def recent_clusters(self, limit: int = 200, exclude_run_id: str | None = None) -> list[dict[str, Any]]:
+    def recent_clusters(
+        self,
+        limit: int = 200,
+        exclude_run_id: str | None = None,
+        exclude_same_window: tuple[str | None, str] | None = None,
+    ) -> list[dict[str, Any]]:
         """最近的历史根因簇。用于「复发识别」与「给 AI 提供同类历史事件」——
-        这类「记忆」用签名 + 相似度就够，不需要向量库。"""
+        这类「记忆」用签名 + 相似度就够，不需要向量库。
+
+        `exclude_same_window` 传入当前巡检的 (scenario_id, window_end)，用于把
+        **同一个数据窗口的重复巡检**排除在历史之外。
+
+        这一条不加会出真问题：同一个故障窗口被重跑几次（回归、调试、评测都会重跑），
+        每次签名完全相同，于是每份报告都写上「历史复发」。
+        但「同一轮故障被巡检两次」和「修好了又回来了」是两件完全不同的事——
+        前者在报告里标成复发，会让读者以为修复无效，属于制造错误信息。
+        """
         stmt = select(clusters)
         if exclude_run_id:
             stmt = stmt.where(clusters.c.run_id != exclude_run_id)
+        if exclude_same_window is not None:
+            scenario_id, window_end = exclude_same_window
+            same_window_runs = select(runs.c.run_id).where(runs.c.window_end == window_end)
+            if scenario_id is None:
+                same_window_runs = same_window_runs.where(runs.c.scenario_id.is_(None))
+            else:
+                same_window_runs = same_window_runs.where(runs.c.scenario_id == scenario_id)
+            stmt = stmt.where(clusters.c.run_id.not_in(same_window_runs))
         stmt = stmt.order_by(clusters.c.created_at_epoch.desc()).limit(limit)
         with self.db.connect() as conn:
             rows = conn.execute(stmt).mappings().all()

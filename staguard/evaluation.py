@@ -139,9 +139,17 @@ def run_evaluation(
     settings: Settings,
     repo: Repository,
     source_name: str | None = None,
+    analyzer: object | None = None,
 ) -> EvaluationReport:
+    """跑一遍全部场景并打分。
+
+    `analyzer` 可注入：**自动化测试固定传入「不可用」的 provider 走规则兜底路径**。
+    理由很直接——测试不应该依赖外部服务。让 CI 去调大模型，
+    结果就是模型一抖动测试就红，久而久之没人再信这个测试。
+    真实模型的归因质量由 `make eval` 人工确认，两条路径各自负责自己的验证。
+    """
     report = EvaluationReport()
-    orchestrator = InspectionOrchestrator(settings, repo)
+    orchestrator = InspectionOrchestrator(settings, repo, analyzer=analyzer)  # type: ignore[arg-type]
 
     for scenario in settings.scenarios.scenarios:
         outcome = ScenarioOutcome(

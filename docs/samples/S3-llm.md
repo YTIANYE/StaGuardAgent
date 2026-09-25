@@ -1,12 +1,12 @@
 # 业务稳定性巡检报告
 
-> 巡检编号 `run-20260925-100000-S3`　|　场景 `S3`　|　数据源 `file`　|　状态 `部分降级`
+> 巡检编号 `run-20260925-100000-S3`　|　场景 `S3`　|　数据源 `file`　|　状态 `成功`
 
 ## 一、巡检概览
 
 - **巡检窗口**：2026-09-25 09:30~10:00（30分钟），粒度 60s
 - **覆盖范围**：8 个服务 / 15 个实例
-- **执行耗时**：4.7s
+- **执行耗时**：13.8s
 
 ### 稳定性评分
 
@@ -27,14 +27,17 @@
 
 ## 二、风险总结
 
-本次巡检共识别 1 个根因簇，最严重的是 order-svc 的QPS 异常（P1 紧急），已扩散至 8 个服务。归因类别集中于：流量波动。
+本次异常是全链路 8 个服务 QPS 同向、同幅度（约 2.6~3.4 倍）突增引发的容量冲击：流量上涨是触发机制，order-svc 因 CPU 打满（99%，持续 21 分钟）最先失守，随后 payment-svc、bank-channel、inventory-svc、mysql-order 的连接池/CPU 相继越线。规则给出的 E 级（45 分）与真实影响基本相符，但需注意可用性与性能维度均未越线，当前尚未造成业务错误，风险集中在资源水位。
 
 - **趋势判断**：持续恶化
-  - 依据：当前仍有 1 个根因簇未恢复，涉及 order-svc QPS、order-svc CPU 使用率、bank-channel 连接池使用率
-  - 预测：若未在窗口内处置，异常会继续沿依赖链向上游扩散，建议在下一轮巡检前完成止血
+  - 依据：全链路 QPS 仍处于高位（各服务 series.last 仍显著高于基线，如 order-svc-1 last=1323.7 vs 基线 756.4），order-svc CPU 持续 21 分钟打满、bank-channel 与 mysql-order 连接池持续 11~14 分钟打满且 series.last 仍为 99%，资源水位无回落迹象；成功率虽暂未越线，但连接池打满意味着新请求即将被拒绝。
+  - 预测：若流量维持当前水平，bank-channel 连接池（99%，持续 14 分钟）预计在 10~20 分钟内开始拒绝新请求，payment-svc 成功率将随之跌破 SLO；order-svc CPU 已打满 21 分钟，若继续无扩容，P95 延时将先于错误率恶化，随后出现超时级联。
 - **证据不足之处**：
-  - 当前结论由规则归因生成（原因：未配置 llm_api_key，无法调用大模型），未经大模型复核，对复杂链路的因果判断能力有限
-  - 如需更深入的根因推理，请配置 LLM 凭据后重跑本次巡检
+  - 流量突增的外部触发源（大促、压测、爬虫或客户端行为）无法从证据包确认，仅能观测到全链路同向同幅度上涨这一现象。
+  - 规则 rule_hypothesis 认为 order-svc 是根因并沿依赖链向上游传导，但拓扑中 order-svc 是 gateway 的下游、payment-svc/inventory-svc 的上游，传播方向应为下游->上游；本结论按「流量为触发机制、order-svc 为最先失守环节」给出，与规则表述的因果方向不同。
+  - bank-channel 在拓扑中已是最下游（无更下游依赖），其连接池打满无法区分是自身处理能力不足还是其外部银行通道异常，本结论按可观测的资源水位归因。
+  - CHG-20260925-0062（order-svc 扩容，76 分钟前）与 CHG-20260924-0052（gateway 健康检查，286 分钟前）均不在异常起始前 30 分钟内，未作为根因，但扩容未生效可能影响 order-svc 的承载能力，建议单独核实。
+  - 证据包未包含成功率/延时明细，无法确认当前是否已有请求被拒绝或超时。
 
 ## 三、异常清单
 
@@ -93,26 +96,26 @@
 - **信号规模**：45 条异常，涉及 8 个服务（bank-channel、gateway、inventory-svc、mysql-order、order-svc、payment-svc、redis-session、user-svc）
 - **传播路径**：`order-svc → payment-svc → bank-channel`　（数据流方向，故障影响由此向上游扩散）
 - **规则假设**：order-svc 的 QPS 异常沿依赖链向上游传导，已影响 4 个上游服务（bank-channel、inventory-svc、mysql-order、payment-svc），建议优先排查 order-svc
-- **AI 根因**：**流量波动** — 全链路 8 个服务的流量同向上涨，无局部故障特征，同时已造成下游资源水位升高；证据：QPS 2449.2 为基线 756.4 的 3.24 倍（置信度 65%）
+- **AI 根因**：**流量波动** — 全链路 8 个服务 QPS 同向突增约 2.6~3.4 倍（gateway 2.65x、order-svc 3.24x、payment-svc 3.27x、bank-channel 3.22x、inventory-svc 3.26x、mysql-order 3.36x、user-svc 2.59x、redis-session 2.69x），流量冲击是触发机制；order-svc 因 CPU 打满（99%，持续 21 分钟）最先失守，进而沿依赖链向下游传导资源压力。（置信度 82%，**历史复发**）
 - **AI 认定的根因服务**：`order-svc`
-- **影响面**：影响 8 个服务（bank-channel、gateway、inventory-svc、mysql-order、payment-svc、redis-session、user-svc），波及 45 项指标
-- **建议责任方**：交易平台组
+- **影响面**：全链路 15 个实例（100%）资源水位越线：order-svc 三实例 CPU 打满（99%）、bank-channel 与 mysql-order 连接池打满（99%）、payment-svc 连接池 99%/CPU 98%。当前成功率与业务错误率仍在 SLO 内，但 bank-channel 连接池已接近拒绝新请求的临界点，若流量维持将出现支付链路失败。
+- **建议责任方**：交易平台组（order-svc/gateway）、支付组（payment-svc/bank-channel）、DBA（mysql-order）
 
-<details><summary>证据引用（45 条）</summary>
+<details><summary>证据引用（22 条）</summary>
 
 - `BIZ-03:order-svc/order-svc-1/qps`
-- `RES-01:order-svc/order-svc-0/cpu_usage`
-- `RES-04:bank-channel/bank-channel-0/conn_usage`
-- `RES-04:mysql-order/mysql-order-0/conn_usage`
-- `RES-01:order-svc/order-svc-1/cpu_usage`
-- `RES-01:mysql-order/mysql-order-0/cpu_usage`
-- `BIZ-03:bank-channel/bank-channel-0/qps`
-- `RES-01:order-svc/order-svc-2/cpu_usage`
-- `BIZ-03:payment-svc/payment-svc-1/qps`
-- `RES-04:payment-svc/payment-svc-1/conn_usage`
 - `BIZ-03:order-svc/order-svc-0/qps`
+- `BIZ-03:order-svc/order-svc-2/qps`
+- `BIZ-03:gateway/gateway-0/qps`
+- `BIZ-03:gateway/gateway-1/qps`
+- `BIZ-03:gateway/gateway-2/qps`
 - `BIZ-03:payment-svc/payment-svc-0/qps`
-- …其余 33 条同类证据（见 JSON 报告）
+- `BIZ-03:payment-svc/payment-svc-1/qps`
+- `BIZ-03:bank-channel/bank-channel-0/qps`
+- `BIZ-03:inventory-svc/inventory-svc-0/qps`
+- `BIZ-03:inventory-svc/inventory-svc-1/qps`
+- `BIZ-03:mysql-order/mysql-order-0/qps`
+- …其余 10 条同类证据（见 JSON 报告）
 
 </details>
 
@@ -121,23 +124,25 @@
 ### 立即止血（本次窗口内）
 
 - **CLUS-01 · 流量波动**
-  - 核对容量水位与限流阈值，确认是否为预期活动流量
+  - 立即对 order-svc 扩容（当前 3 实例 CPU 已打满，建议至少扩至 6 实例并确认 CHG-20260925-0062 的扩容为何未生效），同时为 order-svc 配置基于 CPU 的 HPA 自动扩缩容。
 
 ### 短期加固（本周内）
 
-- [CLUS-01] 本次虽然业务未受损，但下游实例资源已接近打满；按当前流量峰值反推所需容量并预留 30% 余量，避免下一轮放量时直接击穿
-- [CLUS-01] 容量侧：核对容量水位与限流配置；业务侧：确认是否为预期活动流量。
-- [CLUS-01] 为 QPS 配置对应的告警与自动化处置预案，缩短下次的发现时长
+- [CLUS-01] 立即对 bank-channel 与 mysql-order 的连接池上限做临时上调（当前 99% 打满），并确认 bank-channel 侧对接方的限流阈值，避免连接被拒后向上游放大。
+- [CLUS-01] 短期：为 gateway 增加入口限流/排队（当前 QPS 已 2.65 倍基线），在流量突增时保护下游 order-svc/payment-svc。
+- [CLUS-01] 短期：复盘本次流量突增来源（大促预热、压测或外部爬虫），确认是否为预期流量；若为预期，需按峰值重新做容量规划。
 
 ### 长期治理
 
-- 把本次命中的规则阈值反哺到容量规划：反复越线的指标说明当前水位与业务量已经不匹配
-- 为高频根因（依赖故障、资源瓶颈）沉淀标准处置手册，把平均恢复时间从小时级压到分钟级
-- 对核心链路补充依赖隔离与熔断降级能力，避免单点依赖故障放大成全链路事故
+- 为 order-svc、payment-svc、bank-channel 建立基于 QPS 与 CPU 的自动扩缩容策略，避免大促流量下人工扩容滞后。
+- 对 gateway 入口实施分级限流与排队，按下游服务容量设置差异化阈值，防止单点流量冲击穿透到支付链路。
+- 对 bank-channel、mysql-order 等连接池型依赖设置连接池使用率 >85% 的预警与自动扩容/降级预案，避免打满后直接拒绝请求。
+- 建立全链路流量同向突增的识别规则（多服务 QPS 同幅度上涨），在资源水位越线前触发容量预案，而非等到 CPU/连接池打满。
+- 复盘 CHG-20260925-0062 扩容未生效的原因，确保扩缩容变更在异常窗口内可被验证生效。
 
 ## 六、稳定性趋势
 
-**对比对象**：`run-20260925-100000-S1`（2026-09-26T03:20+08:00）
+**对比对象**：`run-20260925-100000-S1`（2026-09-26T03:19+08:00）
 
 - 评分变化：**+24.6 分**（较上次上升）
 - 稳定性评分较上次上升 24.6 分；新增异常 27 项、已恢复 41 项、持续未解决 18 项；持续未解决的项需要确认是否有人在跟进。
@@ -189,7 +194,7 @@
 
 ### 评分历史
 
-`▃▆▄▃█▁▃`　最近 7 次：45 → 84 → 60 → 45 → 96 → 20 → 45
+`▃▄▆▃█▁▃`　最近 7 次：45 → 60 → 84 → 45 → 96 → 20 → 45
 
 ## 七、附录
 
@@ -223,14 +228,14 @@
 
 | 阶段 | 状态 | 耗时 | 说明 |
 | --- | --- | ---: | --- |
-| 数据采集 | 成功 | 591ms | file 通道采集 215676 个点 / 150 条时序（587ms） |
-| 标准化清洗 | 成功 | 2602ms | 216000 个有效点 / 150 条时序；缺失率 0.00%，置信度 高 |
-| 结构化存储 | 成功 | 140ms | 数据集 S3 就绪（216000 个指标点） |
-| 动态基线 | 成功 | 1234ms | 计算 150 条基线，动态基线覆盖率 100%（归档 603894 点） |
+| 数据采集 | 成功 | 594ms | file 通道采集 215676 个点 / 150 条时序（590ms） |
+| 标准化清洗 | 成功 | 2610ms | 216000 个有效点 / 150 条时序；缺失率 0.00%，置信度 高 |
+| 结构化存储 | 成功 | 139ms | 数据集 S3 就绪（216000 个指标点） |
+| 动态基线 | 成功 | 1270ms | 计算 150 条基线，动态基线覆盖率 100%（归档 603894 点） |
 | 规则巡检 | 成功 | 114ms | 16 条规则命中 45 项原始发现（114ms） |
-| 聚合去重 | 成功 | 2ms | 45 条异常（抑制 0 条）聚成 1 个根因簇 |
+| 聚合去重 | 成功 | 3ms | 45 条异常（抑制 0 条）聚成 1 个根因簇 |
 | 稳定性评分 | 成功 | 0ms | 规则算分 45.0（E 严重）；紧急（P1）异常命中核心链路服务，故障会直接放大到用户侧，封顶 45 |
-| AI 智能分析 | 降级 | 3ms | 降级运行（未配置 llm_api_key，无法调用大模型）；1 条根因结论，token 0，耗时 0ms |
-| 报告输出 | 成功 | 4ms | Markdown 报告 10914 字符，已写入 run-20260925-100000-S3.md |
+| AI 智能分析 | 成功 | 9038ms | deepseek/deepseek-chat；1 条根因结论，token 20057，耗时 9032ms |
+| 报告输出 | 成功 | 7ms | Markdown 报告 12359 字符，已写入 run-20260925-100000-S3.md |
 
-- AI 分析：降级运行（未配置 llm_api_key，无法调用大模型）；调用 0 次，耗时 0ms，token 0，提示词版本 v1
+- AI 分析：deepseek/deepseek-chat；调用 1 次，耗时 9032ms，token 20057，提示词版本 v1

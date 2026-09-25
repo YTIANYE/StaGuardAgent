@@ -119,14 +119,21 @@ class OpenAICompatibleProvider:
             raise ProviderError(f"{exc.__class__.__name__}: {exc}") from exc
 
         latency_ms = int((time.perf_counter() - started) * 1000)
-        content = (completion.choices[0].message.content or "").strip()
+        choice = completion.choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
+        content = _strip_code_fence((choice.message.content or "").strip())
         usage = getattr(completion, "usage", None)
         try:
             payload = json.loads(content)
         except json.JSONDecodeError as exc:
-            raise ProviderError(f"模型返回的内容不是合法 JSON：{content[:200]}") from exc
+            raise ProviderError(_describe_bad_json(content, finish_reason)) from exc
         if not isinstance(payload, dict):
-            raise ProviderError("模型返回的 JSON 顶层不是对象")
+            raise ProviderError(f"模型返回的 JSON 顶层不是对象（{type(payload).__name__}）")
+
+        if finish_reason == "length":
+            # JSON 侥幸解析成功但被截断，意味着后面的 findings 可能整段丢失。
+            # 这种情况必须显式告警，否则报告会「看起来正常但内容少了一半」。
+            logger.warning("模型输出因 max_tokens 上限被截断，结论可能不完整")
 
         return LLMResponse(
             payload=payload,
@@ -137,6 +144,38 @@ class OpenAICompatibleProvider:
             model=self.model,
             provider=self.name,
         )
+
+
+def _strip_code_fence(content: str) -> str:
+    """去掉模型自作主张包上的 Markdown 代码块围栏。
+
+    提示词里已经明确要求「只输出 JSON」，但实测仍会偶发地把结果包在
+    ```json ... ``` 里。为此重试一次是浪费——剥离围栏的成本是零。
+    """
+    if not content.startswith("```"):
+        return content
+    body = content[3:]
+    if body.lower().startswith("json"):
+        body = body[4:]
+    return body.rsplit("```", 1)[0].strip()
+
+
+def _describe_bad_json(content: str, finish_reason: str | None) -> str:
+    """把「不是合法 JSON」翻译成能直接定位原因的信息。
+
+    实测教训：只打印开头 200 字符毫无用处——JSON 若是被 max_tokens 截断，
+    开头看起来完全正常，报错信息反而把人引向「模型格式不稳定」这种错误方向。
+    真正有用的是**结尾**和 finish_reason。
+    """
+    head = content[:160].replace("\n", " ")
+    tail = content[-160:].replace("\n", " ")
+    if finish_reason == "length":
+        cause = "输出被 max_tokens 上限截断（请调大 STAGUARD_LLM_MAX_TOKENS）"
+    elif not content:
+        cause = "模型返回了空内容"
+    else:
+        cause = "模型输出不是合法 JSON"
+    return f"{cause}；finish_reason={finish_reason}；开头：{head}…；结尾：…{tail}"
 
 
 def build_provider(config: AppConfig) -> LLMProvider:

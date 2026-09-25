@@ -67,9 +67,7 @@ def build_evidence(
         "rule_score": _score_dict(score),
         "data_quality": _quality_dict(data_quality),
         "clusters": [_cluster_dict(ctx, cluster, history.get(cluster.cluster_id, [])) for cluster in clusters],
-        "changes_in_lookback": [
-            change.to_prompt_dict() for change in _relevant_changes(ctx, clusters)
-        ],
+        "changes": _change_dicts(ctx, clusters),
         "instructions_note": (
             "证据包中所有数值均为实测事实。clusters[].rule_hypothesis 是巡检规则给出的"
             "**待验证猜想**，请独立判断，不必与它一致；若你的结论与之不同，"
@@ -107,15 +105,34 @@ def _evidence_item(ctx: EvalContext, anomaly: Anomaly) -> dict[str, Any]:
     return item
 
 
-def _relevant_changes(ctx: EvalContext, clusters: list[AnomalyCluster]):
-    """只保留与异常服务相关的变更，减少干扰项。
+def _change_dicts(ctx: EvalContext, clusters: list[AnomalyCluster]) -> list[dict[str, Any]]:
+    """保留与异常服务相关的变更，并**把「距异常起始多少分钟」算好给它**。
 
-    背景变更（与本次异常无关的历史发布）会被这里过滤掉大部分——
-    但**保留它们的存在感仍然重要**：真正的干扰项来自「时间接近但因果无关」的变更，
-    那类会被保留下来，正是它们让「看到变更就说是变更引入」的懒惰推理暴露出来。
+    为什么要预计算这个字段：实测中模型会引用一条 42 分钟前的配置变更当作成因——
+    它并非读错时间戳，而是**需要自己拿两个时间做差**这个额外一步被跳过了。
+    把距离算好放在字段里，等于把「判断相关性」这件事从模型的算术里挪回我们的代码里，
+    模型只需要对着一个数字做判断。这类「别让模型做它不擅长的机械计算」的调整，
+    往往比反复强调「要注意时间」有效得多。
+
+    也刻意**不做时间过滤**：真正的干扰项来自「时间接近但因果无关」的变更，
+    「时间偏远但被误当成原因」的判断错误必须暴露出来而不是被我们掩盖掉。
+    提示词里给出了 30 分钟的判定口径，模型只需要对着 `within_30min_window` 做判断。
     """
     services = {service for cluster in clusters for service in cluster.services}
-    return [change for change in ctx.changes() if change.service in services or not clusters]
+    onsets = [cluster.primary.first_seen for cluster in clusters if cluster.primary]
+    earliest = min(onsets) if onsets else None
+
+    selected: list[dict[str, Any]] = []
+    for change in ctx.changes():
+        if clusters and change.service not in services:
+            continue
+        item = change.to_prompt_dict()
+        if earliest is not None:
+            minutes = round((earliest - change.ts).total_seconds() / 60.0, 1)
+            item["minutes_before_earliest_anomaly"] = minutes
+            item["within_30min_window"] = 0 <= minutes <= 30
+        selected.append(item)
+    return selected
 
 
 def _score_dict(score: ScoreResult | None) -> dict[str, Any] | None:

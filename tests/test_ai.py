@@ -104,16 +104,36 @@ def test_unrelated_change_does_not_cause_false_attribution(settings: Settings):
 
 
 def test_dependency_failure_when_pool_saturated_with_latency(settings: Settings):
-    """连接池打满 + 延时恶化 = 下游慢拖垮上游，而不是自己容量不足。"""
+    """连接池打满 + 延时恶化，且**下游也在报警** —— 才能判为下游拖垮上游。"""
     primary = _anomaly("RES-04", "payment-svc", MetricName.CONN_USAGE)
-    latency = _anomaly("PERF-01", "order-svc", MetricName.LATENCY_P99, Severity.P2)
+    downstream = _anomaly("PERF-01", "bank-channel", MetricName.LATENCY_P99, Severity.P2)
+    cluster = AnomalyCluster(
+        cluster_id="CLUS-01", primary=primary, members=[downstream],
+        services=["payment-svc", "bank-channel"], max_level=Severity.P1,
+        propagation_path=["payment-svc", "bank-channel"],
+    )
+    attributor = FallbackAttributor([], topology=settings.topology)
+    assert attributor._attribute(cluster).root_cause_category is RootCauseCategory.DEPENDENCY_FAILURE  # noqa: SLF001
+
+
+def test_leaf_service_saturation_is_not_blamed_on_a_nonexistent_downstream(settings: Settings):
+    """链路最下游的叶子服务，其连接池打满不能再归因给「它的下游」。
+
+    这是实测踩到的坑：S1 场景里规则兜底对着无下游的银行渠道说
+    「指向其下游依赖响应退化」——审阅者一核对拓扑就会发现这个结论不可观测。
+    **宁可给出保守但站得住的结论，也不要给出专业但无依据的结论。**
+    """
+    primary = _anomaly("RES-04", "bank-channel", MetricName.CONN_USAGE)
+    latency = _anomaly("PERF-01", "bank-channel", MetricName.LATENCY_P99, Severity.P1)
     cluster = AnomalyCluster(
         cluster_id="CLUS-01", primary=primary, members=[latency],
-        services=["payment-svc", "order-svc"], max_level=Severity.P1,
-        propagation_path=["order-svc", "payment-svc"],
+        services=["bank-channel", "payment-svc"], max_level=Severity.P1,
+        propagation_path=["payment-svc", "bank-channel"],
     )
-    finding = FallbackAttributor([])._attribute(cluster)  # noqa: SLF001
-    assert finding.root_cause_category is RootCauseCategory.DEPENDENCY_FAILURE
+    attributor = FallbackAttributor([], topology=settings.topology)
+    finding = attributor._attribute(cluster)  # noqa: SLF001
+    assert finding.root_cause_category is RootCauseCategory.RESOURCE_BOTTLENECK
+    assert "最下游" in finding.root_cause
 
 
 def test_traffic_fluctuation_is_not_treated_as_fault(settings: Settings):

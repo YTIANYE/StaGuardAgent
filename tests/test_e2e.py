@@ -34,13 +34,37 @@ def prepared(settings: Settings) -> Repository:
     return repo
 
 
-def test_all_scenarios_meet_attribution_baseline(settings: Settings, prepared: Repository):
+@pytest.fixture(scope="module")
+def offline_settings(settings: Settings) -> Settings:
+    """强制走规则兜底路径的配置。
+
+    **端到端测试不能依赖外部大模型**：模型一抖动测试就红，久而久之没人再信它。
+    而且规则兜底路径是确定性的，断言的阈值才有意义——
+    让断言依赖一个每次答案都不同的组件，本身就不是好测试。
+    真实模型的归因质量由 `make eval` 人工确认。
+    """
+    app = settings.app.model_copy(update={"llm_enabled": False})
+    return settings.model_copy(update={"app": app})
+
+
+@pytest.fixture(scope="module")
+def offline_analyzer(offline_settings: Settings):
+    from staguard.ai import AIAnalyzer, DisabledProvider
+
+    return AIAnalyzer(offline_settings, DisabledProvider("端到端测试固定走规则兜底路径"))
+
+
+def test_all_scenarios_meet_attribution_baseline(
+    offline_settings: Settings,
+    prepared: Repository,
+    offline_analyzer,
+):
     """七个场景的根因命中率与级别命中率必须达标，且正常态不能误报。
 
-    这里断言的是「规则兜底路径」的质量——真实模型接入后只会更好，
-    所以这个基线同时也是「AI 挂了也不会退化成不可用」的保证。
+    这里断言的是「规则兜底路径」的质量——它同时也是
+    「AI 挂了也不会退化成不可用」这个承诺的量化保证。
     """
-    report = run_evaluation(settings, prepared)
+    report = run_evaluation(offline_settings, prepared, analyzer=offline_analyzer)
 
     assert report.root_cause_accuracy >= 0.85, f"根因命中率过低：{report.render()}"
     assert report.level_accuracy >= 0.85, f"级别命中率过低：{report.render()}"

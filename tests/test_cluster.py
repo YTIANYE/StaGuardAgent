@@ -89,6 +89,27 @@ def test_volume_cluster_attributes_to_entry(settings: Settings):
     assert "入口" in clusters[0].hypothesis
 
 
+def test_severe_downstream_anomaly_beats_upstream_noise(settings: Settings):
+    """真正出故障的服务，必须压过入口那条由噪声造成的轻量偏移。
+
+    实测踩到的坑：S4 场景里用户服务发布后业务错误率飙到 5.4%（P2），
+    同时入口网关因为流量天然波动，成功率有个 1 个百分点的轻微偏移（P4）。
+    早期实现用纯加权分数选主根因，「越靠上游越像根因」让那条 P4 拿满方向分，
+    于是根因被定位到了**完全无辜的网关**上，而正确答案是发布变更所在的用户服务。
+
+    修法：先比严重度，同级之间才比加权分数——
+    一个 P4 级的噪声解释不了下游的 P2 故障。
+    """
+    anomalies = [
+        _anomaly("BIZ-01", "gateway", "gateway-0", Severity.P4, 0.2),
+        _anomaly("BIZ-02", "user-svc", "user-svc-0", Severity.P2, 0.8, MetricName.BUSINESS_ERROR_RATE),
+    ]
+    anomalies[0].first_seen = from_epoch(BASE_EPOCH - 1700)  # 入口的偏移出现得更早
+    clusters = build_clusters(anomalies, settings.topology, WINDOW)
+    assert clusters[0].primary.service == "user-svc"
+    assert clusters[0].primary.level is Severity.P2
+
+
 def test_chain_health_never_becomes_primary(settings: Settings):
     """链路健康度是聚合症状，不能当根因。
 

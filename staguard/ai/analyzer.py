@@ -60,14 +60,18 @@ class AIAnalyzer:
     ) -> tuple[AIAnalysis, AIMeta]:
         """执行归因分析。`ctx` 允许为空——无上下文时自动退化为规则归因。"""
         owner_lookup = getattr(ctx, "owner", None)
-        fallback = FallbackAttributor(self._changes_for(ctx), owner_lookup=owner_lookup)
+        fallback = FallbackAttributor(
+            self._changes_for(ctx),
+            owner_lookup=owner_lookup,
+            topology=getattr(ctx, "topology", None) or self.settings.topology,
+        )
 
         if not clusters:
             return self._clean_result(ctx, data_quality), AIMeta(
                 provider="rule", model="none", degraded=False, prompt_version=PROMPT_VERSION,
             )
 
-        history_map = self._history_map(repo, run_id, clusters)
+        history_map = self._history_map(ctx, repo, run_id, clusters)
         _mark_recurrence(clusters, history_map)
 
         # 没有上下文时无法组装证据包，直接走规则归因。
@@ -255,14 +259,23 @@ class AIAnalyzer:
     # ------------------------------------------------------------------ 辅助
     def _history_map(
         self,
+        ctx: EvalContext | None,
         repo: Repository | None,
         run_id: str | None,
         clusters: list[AnomalyCluster],
     ) -> dict[str, list[HistoryMatch]]:
-        if repo is None:
+        if repo is None or ctx is None:
             return {}
+        # 排除同一数据窗口的历史：重跑同一个故障窗口不是「复发」，
+        # 标成复发会让读者误以为修复无效，属于制造错误信息。
+        exclude_same_window = (
+            getattr(ctx, "scenario_id", None),
+            ctx.window.end.isoformat(timespec="seconds"),
+        )
         try:
-            recent = repo.recent_clusters(limit=200, exclude_run_id=run_id)
+            recent = repo.recent_clusters(
+                limit=200, exclude_run_id=run_id, exclude_same_window=exclude_same_window
+            )
         except Exception:  # noqa: BLE001 - 历史检索失败不应阻断归因
             logger.warning("历史事件检索失败，跳过复发识别", exc_info=True)
             return {}
