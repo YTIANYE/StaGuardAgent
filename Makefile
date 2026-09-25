@@ -7,7 +7,7 @@ PIP := .venv/bin/pip
 SCENARIO ?= S1
 SOURCE ?=
 
-.PHONY: help venv install gen-data run run-all runs eval test test-fast lint fmt serve monitor schedule docker-build docker-up clean
+.PHONY: help venv install gen-data run run-all runs eval sample test test-fast lint fmt serve monitor schedule docker-build docker-up clean
 
 help: ## 显示可用命令
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -37,6 +37,9 @@ runs: ## 查看历史巡检记录
 
 eval: ## 跑归因评测集，输出根因命中率 / 级别命中率 / 误报率
 	COLUMNS=200 $(PY) -m staguard eval
+
+sample: ## 导出报告样例到 docs/samples（文件名按 AI 模式区分，便于对比）
+	COLUMNS=200 $(PY) -m staguard sample
 
 test: ## 全量测试（含端到端，首次约 30s）
 	$(PY) -m pytest tests/ -q

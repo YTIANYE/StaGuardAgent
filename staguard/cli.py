@@ -8,6 +8,7 @@
     staguard serve        启动 HTTP 服务（含健康探针与手动触发）
     staguard mock-monitor 启动模拟监控数据接口（HTTP 采集通道的对端）
     staguard eval         跑归因评测集，量化 AI 归因质量
+    staguard sample       导出报告样例（按 AI 模式区分文件名，便于对比）
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from rich.table import Table
 from .config import build_settings
 from .dataset.sync import build_all
 from .orchestrator import InspectionOrchestrator
+from .report import render_markdown
 from .store import Database, Repository
 from .utils.logging import setup_logging
 from .utils.timeutil import format_ts, parse_iso
@@ -246,6 +248,50 @@ def schedule(
     finally:
         scheduler.shutdown()
         console.print("[yellow]调度器已停止[/yellow]")
+
+
+@app.command("sample")
+def export_samples(
+    output_dir: Annotated[Path, typer.Option("--out", "-o", help="样例输出目录")] = Path("docs/samples"),
+    scenarios: Annotated[str, typer.Option("--scenarios", help="逗号分隔的场景编号")] = "S0,S1,S3,S4,S6",
+    source: Annotated[str | None, typer.Option("--source")] = None,
+    config_dir: Annotated[Path | None, typer.Option("--config-dir")] = None,
+) -> None:
+    """导出巡检报告样例。
+
+    文件名带上 AI 模式后缀（`-llm` / `-rule-fallback`），
+    这样「规则兜底版本」和「真实模型版本」可以并存，
+    直接 diff 两份报告就能看出接入大模型到底带来了什么差异——
+    比口头说「接了模型效果更好」有说服力得多。
+    """
+    settings, repo = _bootstrap(config_dir, "WARNING", "console")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    orchestrator = InspectionOrchestrator(settings, repo)
+    table = Table(title=f"报告样例 -> {output_dir}", header_style="bold")
+    table.add_column("场景")
+    table.add_column("文件")
+    table.add_column("评分", justify="right")
+    table.add_column("异常", justify="right")
+    table.add_column("AI 模式")
+
+    for raw in scenarios.split(","):
+        scenario_id = raw.strip()
+        if not scenario_id:
+            continue
+        report = orchestrator.run(scenario_id=scenario_id, source_name=source, notify=False)
+        mode = "rule-fallback" if report.ai_meta.degraded else "llm"
+        path = output_dir / f"{scenario_id}-{mode}.md"
+        path.write_text(render_markdown(report), encoding="utf-8")
+        table.add_row(
+            scenario_id, path.name, f"{report.score.total:.1f}",
+            str(report.run.anomaly_count),
+            f"[yellow]{mode}[/yellow]" if mode == "rule-fallback" else f"[green]{mode}[/green]",
+        )
+    console.print(table)
+    if any("rule-fallback" in p.name for p in output_dir.glob("*.md")):
+        console.print(
+            "[dim]提示：配置 STAGUARD_LLM_API_KEY 后重跑本命令，会额外产出 -llm 版本用于对比。[/dim]"
+        )
 
 
 @app.command("eval")
