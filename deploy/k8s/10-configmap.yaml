@@ -1,0 +1,42 @@
+# 配置与密钥
+# ---------------------------------------------------------------------------
+# 巡检策略（阈值、规则、评分权重、场景）全部是配置，不进镜像。
+# 这样调一次阈值不需要重新构建镜像、不需要发版——这是「策略可配」最直接的收益。
+#
+# 机密信息走 Secret 而不是 ConfigMap：ConfigMap 在 etcd 里是明文，
+# 而且 `kubectl describe` 就能看到。
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: staguard-config
+  labels:
+    app.kubernetes.io/name: staguard
+data:
+  STAGUARD_DB_URL: "sqlite:////app/data/staguard.db"
+  STAGUARD_LOG_FORMAT: "json"
+  STAGUARD_LOG_LEVEL: "INFO"
+  STAGUARD_WINDOW_MINUTES: "30"
+  STAGUARD_GRANULARITY_SECONDS: "60"
+  STAGUARD_BASELINE_DAYS: "14"
+  STAGUARD_DEFAULT_SOURCE: "http"
+  STAGUARD_MOCK_API_BASE_URL: "http://staguard-monitor:8090"
+  # 关键：内网监控接口不走系统代理，否则会被代理转发并返回 502
+  STAGUARD_HTTP_SOURCE_TRUST_ENV: "false"
+  STAGUARD_LLM_PROVIDER: "deepseek"
+  STAGUARD_LLM_BASE_URL: "https://api.deepseek.com"
+  STAGUARD_LLM_MODEL: "deepseek-chat"
+  STAGUARD_ALERT_MIN_LEVEL: "P2"
+  STAGUARD_ALERT_DRY_RUN: "true"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: staguard-secret
+  labels:
+    app.kubernetes.io/name: staguard
+type: Opaque
+stringData:
+  # 生产环境请用 External Secrets / Vault 注入，不要把这个文件提交进仓库
+  STAGUARD_LLM_API_KEY: "sk-replace-me"
+  STAGUARD_ALERT_WEBHOOK_URL: ""

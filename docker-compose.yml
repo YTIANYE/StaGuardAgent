@@ -1,0 +1,67 @@
+# 本地一键起全套：模拟监控数据源 + 巡检 API + 定时巡检。
+#
+# 三个进程分开而不是塞进一个容器，理由是它们的生命周期完全不同：
+# 数据源是常驻服务、API 要独立扩缩容、巡检任务是周期性的。
+# 这也是后面迁到 K8s（Deployment + CronJob）时目录结构不用改的原因。
+
+services:
+  monitor:
+    build: .
+    image: staguard:local
+    container_name: staguard-monitor
+    command: ["mock-monitor", "--host", "0.0.0.0", "--port", "8090"]
+    ports:
+      - "8090:8090"
+    volumes:
+      - staguard-data:/app/data
+      - ./reports:/app/reports
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build: .
+    image: staguard:local
+    container_name: staguard-api
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8080:8080"
+    environment:
+      STAGUARD_MOCK_API_BASE_URL: http://monitor:8090
+      STAGUARD_LLM_API_KEY: ${STAGUARD_LLM_API_KEY:-}
+      STAGUARD_LLM_PROVIDER: ${STAGUARD_LLM_PROVIDER:-deepseek}
+    volumes:
+      - staguard-data:/app/data
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+    depends_on:
+      monitor:
+        condition: service_healthy
+    restart: unless-stopped
+
+  scheduler:
+    build: .
+    image: staguard:local
+    container_name: staguard-scheduler
+    # 用 HTTP 通道：顺便持续验证这条接入链路是通的
+    command: ["schedule", "--interval", "30", "--source", "http"]
+    environment:
+      STAGUARD_MOCK_API_BASE_URL: http://monitor:8090
+      STAGUARD_DEFAULT_SOURCE: http
+      STAGUARD_LLM_API_KEY: ${STAGUARD_LLM_API_KEY:-}
+      STAGUARD_LLM_PROVIDER: ${STAGUARD_LLM_PROVIDER:-deepseek}
+      STAGUARD_ALERT_DRY_RUN: "true"
+    volumes:
+      - staguard-data:/app/data
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+    depends_on:
+      monitor:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  staguard-data:

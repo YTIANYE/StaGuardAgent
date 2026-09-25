@@ -1,0 +1,76 @@
+# 定时巡检 CronJob
+# ---------------------------------------------------------------------------
+# 与常驻 Deployment 的取舍：
+#
+#   CronJob          巡检较重、频率不高（每 15~60 分钟）时更划算：
+#                    平时不占资源，跑完即释放。缺点是冷启动有延迟、
+#                    拿不到 API 的 /readyz 能力。
+#
+#   Deployment 常驻   需要随时响应手动触发、或巡检频率很高（分钟级）时用它。
+#
+# 本文件配置的是「每 15 分钟一次的单次巡检」，采集与告警都在同一次运行内完成。
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: staguard-inspection
+  labels:
+    app.kubernetes.io/name: staguard
+    app.kubernetes.io/component: inspection
+spec:
+  # 每 15 分钟巡检一次。
+  # 为什么不是 1 分钟：巡检窗口是 30 分钟，1 分钟一次会让相邻两次的结论
+  # 高度重叠（94% 的数据是同一批），产生大量无意义的报告和告警。
+  # 巡检频率应当与「业务能容忍的最长故障发现时间」对齐，而不是越快越好。
+  schedule: "*/15 * * * *"
+  timezone: "Asia/Shanghai"
+  concurrencyPolicy: Forbid
+  """上一次还没跑完就跳过本次：巡检是「当前状态快照」，
+  并发跑多次只会产生多份互不一致的报告，还可能与调度器抢占数据库写入。"""
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # 单次巡检正常在 1 分钟内完成；给 10 分钟余量，超时说明出问题了。
+      # 没有这个上限的话，一次卡死的大模型调用会永久占住一个 Job。
+      activeDeadlineSeconds: 600
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: staguard
+            app.kubernetes.io/component: inspection
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+          containers:
+            - name: inspection
+              image: staguard:local
+              imagePullPolicy: IfNotPresent
+              args: ["run", "--source", "http"]
+              envFrom:
+                - configMapRef:
+                    name: staguard-config
+                - secretRef:
+                    name: staguard-secret
+              volumeMounts:
+                - name: data
+                  mountPath: /app/data
+                - name: reports
+                  mountPath: /app/reports
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 384Mi
+                limits:
+                  cpu: "1"
+                  memory: 768Mi
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: staguard-data
+            - name: reports
+              emptyDir: {}

@@ -1,0 +1,74 @@
+# 变更事件（模拟发布 / 配置变更记录）
+# ===============================================================
+# 这是 AI 归因里最有价值的一类证据：异常起始时间与变更时间高度重合时，
+# 「变更引入」几乎是唯一说得通的解释。
+#
+# `minutes_before_end` 是相对巡检窗口结束时刻的偏移（负数表示在窗口之前）。
+#
+# `defaults` 里放的是**背景变更**——它们与本次异常无关，是刻意的干扰项。
+# 没有干扰项的归因题目等于送分题；只有存在「时间上接近但因果无关」的变更，
+# 才能检验 AI 是否真的在做因果推理，而不是「看到变更就说变更引入」。
+#
+# 评测时会给这个区分打两个分：
+#   命中率（S4 是否识别为变更引入）+ 误报率（其它场景是否乱怪变更）。
+
+changes:
+  - change_id: CHG-20260922-0031
+    minutes_before_end: -2280
+    service: order-svc
+    type: release
+    version: v3.4.1
+    operator: 张伟
+    description: 订单超时重试次数由 3 次调整为 2 次（已稳定运行 1.5 天）
+    note: 背景变更，时间上与本次异常无关
+
+  - change_id: CHG-20260923-0047
+    minutes_before_end: -960
+    service: inventory-svc
+    type: config
+    version: null
+    operator: 王磊
+    description: 库存服务限流阈值由 800 QPS 调整为 1200 QPS
+    note: 背景变更，时间上与本次异常无关
+
+  - change_id: CHG-20260924-0052
+    minutes_before_end: -300
+    service: gateway
+    type: config
+    version: null
+    operator: 陈晨
+    description: 网关健康检查间隔由 5s 调整为 3s
+    note: 背景变更，时间上与本次异常无关
+
+  # ---- S4 的关键证据：发布后 3 分钟开始出现业务错误 ----
+  - change_id: CHG-20260925-0061
+    scenario: S4
+    minutes_before_end: -15
+    service: user-svc
+    type: release
+    version: v1.9.0
+    operator: 李静
+    description: 用户服务登录态校验逻辑重构，涉及 Session 解析路径
+    note: 与 S4 异常（起始于 T-12 分钟）高度重合
+
+  # ---- S3 的干扰项：大促前的容量动作，属预期内 ----
+  - change_id: CHG-20260925-0062
+    scenario: S3
+    minutes_before_end: -90
+    service: order-svc
+    type: scale
+    version: null
+    operator: 张伟
+    description: 大促前订单服务由 3 实例扩容至 6 实例（实际生效 3 实例）
+    note: 预期内的容量操作
+
+  # ---- S1 的干扰项：渠道侧配置调整，但时间早了 40 分钟 ----
+  - change_id: CHG-20260925-0063
+    scenario: S1
+    minutes_before_end: -65
+    service: bank-channel
+    type: config
+    version: null
+    operator: 支付组
+    description: 银行渠道超时时间由 30s 调整为 25s
+    note: 干扰项，时间上与异常起始（T-24 分钟）相差 41 分钟

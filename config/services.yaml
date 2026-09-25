@@ -1,0 +1,86 @@
+# 服务清单与依赖拓扑
+# ---------------------------------------------------------------
+# 这份文件同时承担三件事：
+#   1. 定义巡检范围（哪些服务、哪些实例）；
+#   2. 定义依赖拓扑，用于「业务链路异常」判定与「根因簇传播聚类」；
+#   3. 定义服务关键度与 SLO，参与异常分级与稳定性评分。
+#
+# criticality 越高，同一幅度异常定级越重；命中核心链路（gateway / order-svc / payment-svc）
+# 的 P1 会触发更严格的评分封顶（见 scoring.yaml）。
+
+default_slo:
+  success_rate: 99.9        # %
+  latency_p99_ms: 800
+  latency_p95_ms: 300
+  business_error_rate: 1.0  # %
+
+services:
+  gateway:
+    tier: entry
+    criticality: 1.0
+    owner: 交易平台组
+    description: 统一入口网关，承载全部外部流量
+    instances: [gateway-0, gateway-1, gateway-2]
+    depends_on: [order-svc, user-svc]
+    slo:
+      latency_p99_ms: 500
+      latency_p95_ms: 200
+
+  order-svc:
+    tier: core
+    criticality: 1.0
+    owner: 交易平台组
+    description: 订单核心服务
+    instances: [order-svc-0, order-svc-1, order-svc-2]
+    depends_on: [payment-svc, inventory-svc]
+
+  payment-svc:
+    tier: core
+    criticality: 1.0
+    owner: 支付组
+    description: 支付服务，直连银行渠道
+    instances: [payment-svc-0, payment-svc-1]
+    depends_on: [bank-channel]
+    slo:
+      latency_p99_ms: 1200
+
+  inventory-svc:
+    tier: core
+    criticality: 0.8
+    owner: 供应链组
+    description: 库存服务
+    instances: [inventory-svc-0, inventory-svc-1]
+    depends_on: [mysql-order]
+
+  user-svc:
+    tier: general
+    criticality: 0.6
+    owner: 用户中心
+    description: 用户与登录服务
+    instances: [user-svc-0, user-svc-1]
+    depends_on: [redis-session]
+
+  # ---- 外部依赖：不产生产能指标，但是根因的高发地带 ----
+  bank-channel:
+    tier: external
+    external: true
+    criticality: 1.0
+    owner: 支付组（对接方）
+    description: 银行渠道（第三方）
+    instances: [bank-channel-0]
+
+  mysql-order:
+    tier: external
+    external: true
+    criticality: 0.8
+    owner: DBA
+    description: 订单主库（自建 MySQL）
+    instances: [mysql-order-0]
+
+  redis-session:
+    tier: external
+    external: true
+    criticality: 0.6
+    owner: 中间件组
+    description: 会话缓存（Redis 集群）
+    instances: [redis-session-0]

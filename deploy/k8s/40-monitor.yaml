@@ -1,0 +1,75 @@
+# 模拟监控数据源（仅演示环境需要）
+# ---------------------------------------------------------------------------
+# 生产环境里这个位置换成真实的监控系统（Prometheus / 云监控 API），
+# collector 只需换一个 MetricSource 实现，编排逻辑不动。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: staguard-monitor
+  labels:
+    app.kubernetes.io/name: staguard
+    app.kubernetes.io/component: monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: staguard
+      app.kubernetes.io/component: monitor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: staguard
+        app.kubernetes.io/component: monitor
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: monitor
+          image: staguard:local
+          args: ["mock-monitor", "--host", "0.0.0.0", "--port", "8090"]
+          ports:
+            - name: http
+              containerPort: 8090
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: staguard-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: staguard-monitor
+  labels:
+    app.kubernetes.io/name: staguard
+spec:
+  selector:
+    app.kubernetes.io/name: staguard
+    app.kubernetes.io/component: monitor
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http

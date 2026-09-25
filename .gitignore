@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.DS_Store
+
+# 生成物：可由 `make gen-data` 复现（固定随机种子），不入库
+#
+# 注意 SQLite 的 WAL 模式会额外产生 -wal / -shm 两个文件，
+# 它们和主库一样是几百 MB 量级，只写 `data/staguard.db` 是挡不住的。
+data/staguard.db
+data/staguard.db-journal
+data/staguard.db-wal
+data/staguard.db-shm
+data/metrics/
+reports/
+logs/

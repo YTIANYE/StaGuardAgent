@@ -1,0 +1,399 @@
+# 多维度稳定性巡检规则
+# ===============================================================
+# 为什么规则要外部化：阈值与分级是「业务策略」，会随业务节奏调整；
+# 写死在代码里意味着每次调整都要改代码、发版、回归。这里全部收敛到 YAML，
+# 只保留「判定逻辑」在代码中，做到「策略可配、算法可测」。
+#
+# ------------------------------------------------------------------
+# `when` 条件字典的通用键（各规则只解释自己关心的子集）：
+#   value               观测值（窗口内最坏值）越过该阈值
+#   deviation_pct       相对动态基线的百分比偏离（绝对幅度）
+#   z_score             稳健 Z 分数 |(v - median) / (1.4826 * MAD)|
+#   drop_points         绝对下跌量（百分点），用于成功率这类比率型指标
+#   rise_points         绝对上升量（百分点）
+#   down_pct            相对基线的下降百分比（0~100）
+#   multiplier          相对基线的倍数
+#   cv                  窗口内变异系数（响应抖动）
+#   ratio               派生比值（长尾恶化 = P99/P50；实例不均衡 = 最差实例/中位实例）
+#   ratio_rise_pct      派生比值相对基线的涨幅百分比
+#   slope_pct_per_hour  每小时变化百分比（趋势型规则）
+#   below_slo           观测值跌破服务 SLO
+#   duration_minutes    需要持续满足的最短时长，用于过滤瞬时毛刺
+#
+# 趋势型规则（PERF-05 / RES-03）额外强制带一道**显著性检验**：
+#   min_t_stat          斜率的 t 统计量门槛（默认 3.0）
+#   min_r2              拟合优度门槛
+# 原因：30 个点的噪声序列随手算出来的斜率很容易「看着」有 15%/h 的涨幅，
+# 但 t 统计量往往只有 1 出头。没有这道闸门，趋势规则在干净数据上会稳定误报。
+#   min_absolute        绝对量门槛，低基数不报，避免误报
+#   instances           同时受影响的实例数门槛
+#
+# 级别按配置顺序自顶向下匹配，首个命中即生效（所以务必按 P1 -> P4 排列）。
+# 所有规则最终都会把条件归一化成 deviation_score(0~1)，分级只是它的分档映射，
+# 这样不同量纲的指标（成功率 %、延时 ms、QPS 倍率）才能被统一排序和评分。
+# ------------------------------------------------------------------
+
+rules:
+  # ======================= 业务层 =======================
+  - id: BIZ-01
+    name: 接口成功率下跌
+    dimension: business
+    description: 成功率跌破 SLO 或相对动态基线显著下跌。技术口径，看的是请求是否被成功服务。
+    params:
+      metric: success_rate
+      min_samples: 5
+    levels:
+      - level: P1
+        when: {drop_points: 5.0, duration_minutes: 3}
+        reason: "成功率 {observed}，较基线 {baseline} 下跌 {drop} 个百分点（相对跌幅 {deviation}%），持续 {duration} 分钟"
+      - level: P2
+        when: {drop_points: 2.0, duration_minutes: 2}
+        reason: "成功率 {observed}，较基线 {baseline} 下跌 {drop} 个百分点"
+      - level: P3
+        when: {drop_points: 0.5}
+        reason: "成功率 {observed}，较基线小幅下跌 {drop} 个百分点"
+      - level: P4
+        # 要求持续 2 分钟：单个采样点跌破 SLO 在正常噪声下也会偶发，
+        # 那不构成「异常」，只是 SLO 定得太紧或者噪声正常。
+        when: {below_slo: true, duration_minutes: 2}
+        reason: "成功率 {observed}，持续 {duration} 分钟跌破 SLO 红线（{slo}）"
+
+  - id: BIZ-02
+    name: 业务错误率上升
+    dimension: business
+    description: |
+      HTTP 200 但业务失败的比例。这是「技术成功、业务失败」的盲区：
+      接口可用性看着 100%，用户其实已经下不了单。真实故障里它常常是最早的信号。
+    params:
+      metric: business_error_rate
+    levels:
+      - level: P1
+        when: {rise_points: 8.0, duration_minutes: 3}
+        reason: "业务错误率 {observed}，较基线 {baseline} 上升 {rise} 个百分点，持续 {duration} 分钟"
+      - level: P2
+        when: {rise_points: 3.0, duration_minutes: 2}
+        reason: "业务错误率 {observed}，较基线 {baseline} 上升 {rise} 个百分点"
+      - level: P3
+        when: {rise_points: 1.0}
+        reason: "业务错误率 {observed}，较基线上行 {rise} 个百分点"
+      - level: P4
+        when: {rise_points: 0.5}
+        reason: "业务错误率 {observed} 出现上行"
+
+  - id: BIZ-03
+    name: 流量突增
+    dimension: business
+    description: QPS 显著高于历史同时段基线。注意：突增本身不等于故障，可能是大促预期流量，需结合成功率判断。
+    params:
+      metric: qps
+      direction: up
+    levels:
+      - level: P1
+        when: {multiplier: 5.0, duration_minutes: 5}
+        reason: "QPS {observed} 达到基线 {baseline} 的 {multiplier} 倍并持续 {duration} 分钟"
+      - level: P2
+        when: {multiplier: 3.0, duration_minutes: 3}
+        reason: "QPS {observed} 为基线 {baseline} 的 {multiplier} 倍"
+      - level: P3
+        when: {multiplier: 2.0}
+        reason: "QPS {observed} 较基线翻倍（{multiplier} 倍）"
+      - level: P4
+        when: {z_score: 4.0}
+        reason: "QPS {observed} 偏离基线 {z} 个稳健标准差"
+
+  - id: BIZ-04
+    name: 流量突降
+    dimension: business
+    description: |
+      QPS 显著低于历史同时段基线。业务上突降比突增更危险：
+      突增多半是业务量，突降往往意味着入口被切断、上游故障或流量丢失，是「静默故障」的典型形态。
+    params:
+      metric: qps
+      direction: down
+    levels:
+      - level: P1
+        when: {down_pct: 80.0, duration_minutes: 3}
+        reason: "QPS {observed} 较基线 {baseline} 下跌 {deviation}%，接近断流"
+      - level: P2
+        when: {down_pct: 50.0, duration_minutes: 2}
+        reason: "QPS {observed} 较基线 {baseline} 下跌 {deviation}%"
+      - level: P3
+        when: {down_pct: 30.0}
+        reason: "QPS {observed} 较基线下跌 {deviation}%"
+      - level: P4
+        when: {z_score: 4.0}
+        reason: "QPS {observed} 低于基线 {z} 个稳健标准差"
+
+  - id: BIZ-05
+    name: 报错量飙升
+    dimension: business
+    description: |
+      错误绝对量的突增。必须同时看倍数和绝对量：
+      基线是 1 个错误时涨 10 倍也才 10 个，不构成事故；基线是 500 时涨 3 倍就是 1500 个。
+    params:
+      metric: error_count
+    levels:
+      - level: P1
+        when: {multiplier: 10.0, min_absolute: 500}
+        reason: "错误数 {observed} 达基线 {baseline} 的 {multiplier} 倍"
+      - level: P2
+        when: {multiplier: 5.0, min_absolute: 200}
+        reason: "错误数 {observed} 达基线 {multiplier} 倍"
+      - level: P3
+        when: {multiplier: 3.0, min_absolute: 50}
+        reason: "错误数 {observed} 较基线上升 {multiplier} 倍"
+      - level: P4
+        when: {multiplier: 2.0, min_absolute: 20}
+        reason: "错误数 {observed} 较基线翻倍"
+
+  # ======================= 链路层 =======================
+  - id: BIZ-06
+    name: 业务链路异常
+    dimension: link
+    description: |
+      沿依赖拓扑计算「链路健康度」——路径上所有节点成功率的乘积（串联可靠性的标准算法），
+      取全局最差链路。单点成功率正常但整条链路健康度差，说明故障在链路的某个中间环节，
+      只看单服务指标会漏掉。
+    params:
+      health_metric: success_rate
+      min_path_length: 2
+    levels:
+      - level: P1
+        when: {deviation_pct: 7.0}
+        reason: "链路 {path} 健康度 {observed}（基线 {baseline}），下降 {deviation}%，最弱环节 {instance}，链路整体已不可用"
+      - level: P2
+        when: {deviation_pct: 3.0}
+        reason: "链路 {path} 健康度 {observed}（基线 {baseline}），下降 {deviation}%，最弱环节为 {instance}"
+      - level: P3
+        when: {deviation_pct: 1.0}
+        reason: "链路健康度 {observed}%，较基线下降 {deviation}%"
+      - level: P4
+        when: {deviation_pct: 0.3}
+        reason: "链路健康度 {observed}% 轻微低于基线（{deviation}%）"
+
+  # ======================= 性能层 =======================
+  - id: PERF-01
+    name: P99 延时超时
+    dimension: performance
+    description: 长尾延时超阈。长尾恶化对用户体验的影响远超均值——1% 的请求卡住 3 秒，用户就会投诉。
+    # 阈值按「默认服务红线 800ms」的尺度书写，运行时按 thresholds.yaml 里各服务的
+    # 实际红线等比缩放（网关 500ms 会变严、银行渠道 1500ms 会变松），规则无需为某个服务特化。
+    params:
+      metric: latency_p99
+    levels:
+      - level: P1
+        when: {value: 3000, duration_minutes: 3}
+        reason: "P99 延时 {observed}，超过 {threshold}ms 红线并持续 {duration} 分钟"
+      - level: P2
+        when: {value: 1500, duration_minutes: 2}
+        reason: "P99 延时 {observed}，显著超过 {threshold}ms 红线"
+      - level: P3
+        when: {value: 800}
+        reason: "P99 延时 {observed} 超出 {threshold}ms 红线"
+      - level: P4
+        when: {value: 760}
+        reason: "P99 延时 {observed}，已接近 {threshold}ms 红线"
+
+  - id: PERF-02
+    name: P95 延时超时
+    dimension: performance
+    description: P95 反映大多数用户的体感，和 P99 一起看能区分「普遍变慢」还是「少数请求长尾」。
+    # 同样按默认红线 300ms 的尺度书写（详见 PERF-01 的说明）。
+    params:
+      metric: latency_p95
+    levels:
+      - level: P1
+        when: {value: 1000, duration_minutes: 3}
+        reason: "P95 延时 {observed}，超过 {threshold}ms 红线并持续 {duration} 分钟"
+      - level: P2
+        when: {value: 500, duration_minutes: 2}
+        reason: "P95 延时 {observed}，显著超过 {threshold}ms 红线"
+      - level: P3
+        when: {value: 300}
+        reason: "P95 延时 {observed} 超出 {threshold}ms 红线"
+      - level: P4
+        when: {value: 285}
+        reason: "P95 延时 {observed}，已接近 {threshold}ms 红线"
+
+  - id: PERF-03
+    name: 响应抖动
+    dimension: performance
+    description: |
+      延时在窗口内的波动幅度（变异系数 CV）。均值没变但忽快忽慢，通常是 GC 停顿、
+      锁竞争、实例被抢占或下游不稳定，这类问题不会被均值类阈值抓到。
+    params:
+      metric: latency_p99
+      min_samples: 5
+    levels:
+      - level: P1
+        when: {cv: 1.0, value: 800}
+        reason: "P99 延时抖动剧烈（CV={cv}），且最高达 {observed}"
+      - level: P2
+        when: {cv: 0.6, value: 500}
+        reason: "P99 延时抖动明显（CV={cv}），峰值 {observed}"
+      - level: P3
+        when: {cv: 0.4}
+        reason: "P99 延时抖动偏高（CV={cv}）"
+      - level: P4
+        when: {cv: 0.25}
+        reason: "P99 延时波动轻微升高（CV={cv}）"
+
+  - id: PERF-04
+    name: 长尾恶化
+    dimension: performance
+    description: |
+      P99/P50 比值恶化。这是很敏感的信号：均值（P50）没动，长尾先动，
+      往往意味着少数请求命中了慢路径（慢查询、缓存击穿、个别实例异常）。
+    params:
+      numerator: latency_p99
+      denominator: latency_p50
+    levels:
+      - level: P1
+        when: {ratio: 20.0, ratio_rise_pct: 200}
+        reason: "P99/P50 达 {ratio}（基线 {baseline}），长尾严重恶化"
+      - level: P2
+        when: {ratio: 12.0, ratio_rise_pct: 100}
+        reason: "P99/P50 达 {ratio}，长尾明显恶化"
+      - level: P3
+        when: {ratio: 8.0, ratio_rise_pct: 50}
+        reason: "P99/P50 升至 {ratio}，长尾有所恶化"
+      - level: P4
+        when: {ratio: 6.0}
+        reason: "P99/P50 为 {ratio}，略高于健康水位"
+
+  - id: PERF-05
+    name: 性能劣化趋势
+    dimension: performance
+    description: |
+      窗口内延时斜率持续上升。这是「慢故障」——每一分钟都还在阈值以内，
+      但趋势明确，等到超阈就已经是事故了。阈值型规则天生抓不到它。
+    params:
+      metric: latency_p99
+      min_samples: 8
+      min_t_stat: 3.0
+      min_r2: 0.5
+    levels:
+      - level: P1
+        when: {slope_pct_per_hour: 60.0}
+        reason: "P99 延时以每小时 {slope} 的速度攀升，按趋势将在 1 小时内突破红线"
+      - level: P2
+        when: {slope_pct_per_hour: 30.0}
+        reason: "P99 延时持续攀升（每小时 {slope}）"
+      - level: P3
+        when: {slope_pct_per_hour: 15.0}
+        reason: "P99 延时呈上升趋势（每小时 {slope}）"
+      - level: P4
+        when: {slope_pct_per_hour: 8.0}
+        reason: "P99 延时出现缓慢上行（每小时 {slope}）"
+
+  # ======================= 资源层 =======================
+  - id: RES-01
+    name: CPU 高负载
+    dimension: resource
+    description: CPU 使用率超阈。持续高负载会让排队延时非线性放大，是典型的雪崩前兆。
+    params:
+      metric: cpu_usage
+    levels:
+      - level: P1
+        when: {value: 95, duration_minutes: 5}
+        reason: "CPU 使用率 {observed}，持续 {duration} 分钟接近打满"
+      - level: P2
+        when: {value: 90, duration_minutes: 3}
+        reason: "CPU 使用率 {observed}，持续 {duration} 分钟处于高位"
+      - level: P3
+        when: {value: 85}
+        reason: "CPU 使用率 {observed} 超出 {threshold}% 预警线"
+      - level: P4
+        when: {z_score: 4.0}
+        reason: "CPU 使用率 {observed} 显著偏离基线 {baseline}"
+
+  - id: RES-02
+    name: 内存占用过高
+    dimension: resource
+    description: 内存使用率超阈。内存压力会先表现为 GC 变频繁、延时抖动，随后才是 OOM。
+    params:
+      metric: mem_usage
+    levels:
+      - level: P1
+        when: {value: 95, duration_minutes: 5}
+        reason: "内存使用率 {observed}，距 OOM 仅一步之遥"
+      - level: P2
+        when: {value: 90, duration_minutes: 3}
+        reason: "内存使用率 {observed}，持续处于高位"
+      - level: P3
+        when: {value: 85}
+        reason: "内存使用率 {observed} 超出 {threshold}% 预警线"
+      - level: P4
+        when: {z_score: 4.0}
+        reason: "内存使用率 {observed} 显著偏离基线 {baseline}"
+
+  - id: RES-03
+    name: 内存增长趋势
+    dimension: resource
+    description: |
+      内存随时间单调增长，典型的内存泄漏/缓存无界增长。需要用比巡检窗口更长的
+      观察窗（默认 24 小时）才能看见趋势，并据此推算 OOM 时间——把「当前风险」
+      升级为「未来必然发生的故障」。
+    params:
+      metric: mem_usage
+      lookback_hours: 24
+      min_samples: 20
+      min_t_stat: 3.0
+      min_r2: 0.6
+    levels:
+      - level: P1
+        when: {slope_pct_per_hour: 3.0, value: 80}
+        reason: "内存在 {samples} 个采样点上以每小时 {slope}% 单调增长且已达 {observed}，{forecast}"
+      - level: P2
+        when: {slope_pct_per_hour: 1.5, value: 70}
+        reason: "内存持续增长（每小时 {slope}%），当前 {observed}，{forecast}"
+      - level: P3
+        when: {slope_pct_per_hour: 0.8}
+        reason: "内存呈稳定增长趋势（每小时 {slope}%），需确认是否为泄漏"
+      - level: P4
+        when: {slope_pct_per_hour: 0.4}
+        reason: "内存缓慢上行（每小时 {slope}%），建议纳入观察"
+
+  - id: RES-04
+    name: 连接数打满
+    dimension: resource
+    description: |
+      连接池使用率超阈。关键判断在于归因方向：自己泄漏（只涨不落）还是
+      下游变慢导致连接被长期占用（与下游延时同步上升）。两者处置方式完全不同。
+    params:
+      metric: conn_usage
+    levels:
+      - level: P1
+        when: {value: 95, duration_minutes: 3}
+        reason: "连接池使用率 {observed}，接近打满，新请求将被拒绝"
+      - level: P2
+        when: {value: 90, duration_minutes: 2}
+        reason: "连接池使用率 {observed}，持续高位"
+      - level: P3
+        when: {value: 80}
+        reason: "连接池使用率 {observed} 超出 {threshold}% 预警线"
+      - level: P4
+        when: {z_score: 4.0}
+        reason: "连接池使用率 {observed} 显著偏离基线 {baseline}"
+
+  - id: RES-05
+    name: 实例不均衡
+    dimension: resource
+    description: |
+      同一服务的多个实例之间指标差异过大。这能区分「服务级问题」还是「单实例问题」：
+      所有实例一起劣化是服务/依赖问题，只有一个实例离群则是该实例自身的问题
+      （坏节点、宿主机异常、发布未同步）。处置动作完全不同。
+    params:
+      metrics: [cpu_usage, mem_usage, conn_usage, latency_p99]
+      min_instances: 2
+      compare: median
+    levels:
+      - level: P2
+        when: {ratio: 3.0, value: 80}
+        reason: "实例 {instance} 的 {metric} 达同服务中位数的 {ratio} 倍（{observed}），存在单实例异常"
+      - level: P3
+        when: {ratio: 1.8}
+        reason: "实例 {instance} 的 {metric} 为同服务中位数的 {ratio} 倍，出现倾斜"
+      - level: P4
+        when: {ratio: 1.5}
+        reason: "实例 {instance} 的 {metric} 略高于其它实例（{ratio} 倍）"

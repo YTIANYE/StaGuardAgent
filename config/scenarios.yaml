@@ -1,0 +1,187 @@
+# 巡检场景（模拟数据集的剧本）
+# ===============================================================
+# 一个场景 = 一个可以讲清楚的故事 + 一个明确的期望结论。
+# 它同时承担两个职责：
+#   1. 数据源：为模拟数据集注入特定故障形态；
+#   2. 评测基准：`expected_root_cause` 是 AI 归因质量的评分依据（见 tests/test_attribution_eval.py）。
+#
+# 数据分两层生成，对应真实世界的两种存储：
+#   - 长期归档（baseline_history_days @ baseline_interval_seconds）：
+#     干净历史，**不含任何注入**，只有它才能给出可信的动态基线；
+#   - 场景高精度（scenario_history_minutes @ 60s）：
+#     巡检窗口前后分钟级数据，注入发生在这里。历史脏数据不会污染基线。
+
+# 固定数据集结束时刻。**这是可复现性的根基**：数据、报告、评测结论都能被复核。
+dataset_end: "2026-09-25T10:00:00+08:00"
+
+baseline_history_days: 14
+baseline_interval_seconds: 300
+scenario_history_minutes: 180
+
+scenarios:
+  # ------------------------------------------------------------------ 对照组
+  - id: S0
+    name: 正常态（对照组）
+    description: >
+      仅包含自然日周期、随机噪声与偶发单点毛刺，不含任何故障注入。
+      它验证的是「不误报」——在大规模巡检里，误报的代价比漏报更高：
+      告警疲劳会让真正的 P1 被淹没。
+    expected_root_cause: none
+    expected_level: none
+    expect_clean: true
+    seed: 4000
+    injections: []
+
+  # ------------------------------------------------------------------ 依赖故障
+  - id: S1
+    name: 依赖故障（银行渠道劣化引发上游雪崩）
+    description: >
+      银行渠道 P99 从 200ms 劣化到 3.2s，支付服务因慢请求堆积把连接池占满，
+      订单服务成功率跌破 92%、错误数飙升，最终入口网关被连带影响。
+      这是一条教科书式的「外部依赖故障 -> 连接堆积 -> 上游级联雪崩」链路，
+      根因在最下游，影响面在最上游。
+    expected_root_cause: dependency_failure
+    expected_level: P1
+    seed: 4101
+    injections:
+      - kind: latency_spike
+        target: bank-channel
+        start_offset_minutes: -24
+        duration_minutes: 22
+        propagate: true
+        params: {target_ms: 3200, jitter_ms: 420}
+      - kind: success_rate_drop
+        target: bank-channel
+        start_offset_minutes: -24
+        duration_minutes: 22
+        propagate: true
+        params: {value: 92.0}
+      - kind: conn_saturation
+        target: payment-svc
+        start_offset_minutes: -21
+        duration_minutes: 19
+        params: {value: 96}
+      - kind: business_error_spike
+        target: payment-svc
+        start_offset_minutes: -21
+        duration_minutes: 19
+        params: {value: 7.5}
+      - kind: success_rate_drop
+        target: payment-svc
+        start_offset_minutes: -21
+        duration_minutes: 19
+        propagate: true
+        params: {value: 90.0}
+
+  # ------------------------------------------------------------------ 资源瓶颈
+  - id: S2
+    name: 资源瓶颈（库存服务单实例 CPU 打满）
+    description: >
+      库存服务仅 inventory-svc-1 一个实例 CPU 打到 96%，同服务其它实例水位正常，
+      该实例 P99 抬高拉高整体长尾。
+      考察点：能不能识别「单实例异常」——把所有实例一起告警等于没告警，
+      真正的动作是摘掉那一个坏实例。
+    expected_root_cause: resource_bottleneck
+    expected_level: P1
+    seed: 4202
+    injections:
+      - kind: cpu_spike
+        target: inventory-svc/inventory-svc-1
+        start_offset_minutes: -22
+        duration_minutes: 20
+        params: {value: 96}
+      - kind: latency_spike
+        target: inventory-svc/inventory-svc-1
+        start_offset_minutes: -22
+        duration_minutes: 20
+        propagate: true
+        params: {target_ms: 1700, jitter_ms: 300}
+
+  # ------------------------------------------------------------------ 流量突增
+  - id: S3
+    name: 流量突增（大促峰值）
+    description: >
+      订单服务与网关 QPS 涨到基线 3 倍左右，成功率与错误率全程正常，
+      但订单服务的 CPU 被流量推到 99%——业务没坏，容量余量已经耗尽。
+      考察点有两层：
+        1. 根因是「流量」而不是「订单服务本身出了问题」，AI 不该把订单服务当罪犯；
+        2. 但也不能因为业务指标正常就说「一切正常」——CPU 连续 21 分钟 99%
+           是明确的容量告警，下一轮放量就会击穿。
+      正确的输出既要说清根因是流量，也要把容量风险单独拎出来给处置建议。
+    expected_root_cause: traffic_fluctuation
+    expected_level: P1
+    seed: 4303
+    injections:
+      - kind: traffic_burst
+        target: gateway
+        start_offset_minutes: -25
+        duration_minutes: 25
+        propagate: true
+        params: {multiplier: 2.5}
+      - kind: traffic_burst
+        target: order-svc
+        start_offset_minutes: -25
+        duration_minutes: 25
+        propagate: true
+        params: {multiplier: 3.1}
+
+  # ------------------------------------------------------------------ 变更引入
+  - id: S4
+    name:   变更引入（用户服务发布后业务错误率飙升）
+    description: >
+      用户服务发布 v1.9.0 后 3 分钟，业务错误率从 0.08% 飙到 5.4%，而 HTTP 成功率
+      只从 99.97% 微跌到 98.6%——技术口径看起来「只是轻微抖动」，真实业务失败量
+      却已经是事故级。这条场景专门打「只看技术成功率」的盲区，并给出变更事件作为
+      归因证据：异常起始时间与发布时间高度重合，根因基本可以直接定性。
+    expected_root_cause: change_induced
+    expected_level: P2
+    seed: 4404
+    injections:
+      - kind: business_error_spike
+        target: user-svc
+        start_offset_minutes: -12
+        duration_minutes: 12
+        params: {value: 5.4}
+      - kind: success_rate_drop
+        target: user-svc
+        start_offset_minutes: -12
+        duration_minutes: 12
+        params: {value: 98.6}
+
+  # ------------------------------------------------------------------ 流量突降
+  - id: S5
+    name: 流量突降（入口流量丢失）
+    description: >
+      网关 QPS 较基线下跌 72%，下游链路流量同步萎缩，但所有服务健康指标都「正常」——
+      没有错误、没有延时、没有资源压力。这是最容易被漏掉的静默故障：
+      监控全绿，业务已经没单了。突降比突增更危险，因为没人会去报警。
+    expected_root_cause: traffic_fluctuation
+    expected_level: P2
+    seed: 4505
+    injections:
+      - kind: traffic_drop
+        target: gateway
+        start_offset_minutes: -20
+        duration_minutes: 20
+        propagate: true
+        params: {down_pct: 72}
+
+  # ------------------------------------------------------------------ 慢故障
+  - id: S6
+    name: 内存泄漏（支付服务 24 小时持续增长）
+    description: >
+      支付服务内存以每小时约 3% 的速度稳定增长，当前已达 94%。
+      巡检窗口内单看瞬时值只是「内存偏高」，只有把观察窗拉到 24 小时，
+      趋势才会暴露——按当前斜率约数小时内必触发 OOM。
+      考察点：慢故障识别与趋势预测，把「当前风险」升级为「未来必然发生的故障」。
+    expected_root_cause: resource_bottleneck
+    also_accept: [code_defect]
+    expected_level: P1
+    seed: 4606
+    history_minutes: 1500
+    injections:
+      - kind: memory_leak
+        target: payment-svc
+        start_offset_minutes: -1440
+        duration_minutes: 1440
+        params: {start_value: 40.0, end_value: 94.0}

@@ -1,0 +1,168 @@
+# 常驻巡检服务（API + 可选内置调度）
+# ---------------------------------------------------------------------------
+# 两种部署形态二选一，取决于巡检任务的重与轻：
+#
+#   Deployment 常驻（本文件）：巡检本身很快、需要随时响应手动触发时用它。
+#     好处是「定时」和「手动」共用同一套进程，还能提供 /readyz 供编排系统摘流量。
+#
+#   CronJob（见 30-cronjob.yaml）：巡检较重、平时不需要常驻进程时用它，
+#     资源按需申请，跑完即释放。
+#
+# 本项目两种都提供，因为它们各自适配的场景不同——真实落地时运维会问
+# 「为什么是这种形态」，答案应该是业务需求决定的，而不是我们只会一种。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: staguard-api
+  labels:
+    app.kubernetes.io/name: staguard
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: staguard
+      app.kubernetes.io/component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: staguard
+        app.kubernetes.io/component: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: api
+          image: staguard:local
+          imagePullPolicy: IfNotPresent
+          args: ["serve", "--host", "0.0.0.0", "--port", "8080", "--scheduler"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: staguard-config
+            - secretRef:
+                name: staguard-secret
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: reports
+              mountPath: /app/reports
+          # 存活探针：进程卡死时重启。
+          # 这里故意不用 /readyz —— 依赖挂了不该重启进程，
+          # 重启只会让本来就脆弱的依赖雪上加霜（惊群）。
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # 就绪探针：真的去查数据库连通性与数据集是否已初始化。
+          # 「进程活着但干不了活」的实例必须被摘掉流量，否则会持续返回 500。
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 2
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # 需要在 /app/reports 写报告
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: staguard-data
+        - name: reports
+          emptyDir: {}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: staguard-data
+  labels:
+    app.kubernetes.io/name: staguard
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: staguard-api
+  labels:
+    app.kubernetes.io/name: staguard
+spec:
+  selector:
+    app.kubernetes.io/name: staguard
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# 水平扩缩容
+# ---------------------------------------------------------------------------
+# 触发指标是「待处理巡检请求数」而不是 CPU：
+# 巡检是 IO 密集（读时序库、等大模型），CPU 打满之前早就已经开始排队了。
+# 用 CPU 做 HPA 指标会导致扩容永远慢半拍。
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: staguard-api
+  labels:
+    app.kubernetes.io/name: staguard
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: staguard-api
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Pods
+      pods:
+        metric:
+          name: staguard_pending_inspections
+        target:
+          type: AverageValue
+          averageValue: "3"
+  behavior:
+    scaleDown:
+      # 巡检有长尾（大模型调用可能几十秒），缩容太激进会把正在处理的请求打断
+      stabilizationWindowSeconds: 300

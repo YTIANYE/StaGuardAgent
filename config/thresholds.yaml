@@ -1,0 +1,40 @@
+# 静态阈值
+# ---------------------------------------------------------------
+# 两处用途，缺一不可：
+#   1. 绝对阈值判定——有些红线是业务共识，跟历史基线无关（P99 超 800ms 就是超了）；
+#   2. 动态基线冷启动回退——新上线服务没有历史样本，不能因为「没有基线」就不巡检。
+#
+# 阈值单位：百分比类指标用 %，延时类用 ms。
+
+defaults:
+  success_rate: {min: 99.0}          # 低于 99% 视为越过红线（SLO 99.9% 由规则分级细化）
+  business_error_rate: {max: 1.0}    # 业务错误率红线
+  latency_p95: {max: 300}
+  latency_p99: {max: 800}
+  cpu_usage: {max: 85}
+  mem_usage: {max: 85}
+  conn_usage: {max: 90}
+
+# 按服务覆盖。
+# 红线不是「统一标准」，而是「该服务的正常水位」：
+#   - 入口网关抖动会直接放大到用户侧，红线要严；
+#   - 支付服务本身要等银行渠道，天然更慢，红线要松；
+#   - 银行渠道是外部依赖，只保留了它的抖动、没有优化空间，红线最松。
+# 用同一套绝对标准去要求它们，必然是一边误报一边漏报。
+# 规则里的分级阈值会按「本服务红线 / 默认红线」等比缩放，见 rules.yaml 的说明。
+overrides:
+  gateway:
+    latency_p99: {max: 500}
+    latency_p95: {max: 200}
+  order-svc:
+    latency_p99: {max: 900}
+  payment-svc:
+    latency_p99: {max: 1200}
+    latency_p95: {max: 400}
+  bank-channel:
+    latency_p99: {max: 1500}
+    latency_p95: {max: 460}
+    conn_usage: {max: 85}
+  mysql-order:
+    conn_usage: {max: 85}
+    cpu_usage: {max: 90}
