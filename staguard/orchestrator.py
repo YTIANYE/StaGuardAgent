@@ -59,18 +59,19 @@ logger = logging.getLogger(__name__)
 CHANGES_FILE = "changes.yaml"
 
 
-class StageAborted(RuntimeError):
-    """阶段失败且无法继续。"""
-
-
 class StageTracker:
-    """按阶段记录状态与耗时。"""
+    """按阶段记录状态与耗时。
+
+    阶段异常一律**只记录、不向上抛**：巡检报告的一部分失效（例如变更事件没同步上）
+    不应该让整份报告变成空白。需要中断时由调用方在自己的阶段外显式处理，
+    而不是在通用上下文管理器里留一个开关——那只会变成读代码时的干扰项。
+    """
 
     def __init__(self, run: InspectionRun) -> None:
         self.run = run
 
     @contextmanager
-    def stage(self, name: str, critical: bool = False) -> Iterator[StageRecord]:
+    def stage(self, name: str) -> Iterator[StageRecord]:
         record = StageRecord(name=name, status=StageStatus.RUNNING)
         started = time.perf_counter()
         try:
@@ -81,8 +82,6 @@ class StageTracker:
             record.status = StageStatus.FAILED
             record.error = f"{exc.__class__.__name__}: {exc}"
             logger.exception("巡检阶段 %s 执行失败", name)
-            if critical:
-                raise StageAborted(record.error) from exc
         finally:
             record.duration_ms = int((time.perf_counter() - started) * 1000)
             self.run.upsert_stage(record)

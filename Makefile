@@ -1,4 +1,4 @@
-# StaGuardAgent 开发与演示入口
+# StaGuardAgent 开发与运行入口
 # ---------------------------------------------------------------------------
 # 所有常用操作都收敛到 make，评审拿到代码后不需要读文档猜命令。
 
@@ -25,7 +25,7 @@ gen-data: ## 生成模拟数据集（14 天归档入库 + 7 个场景文件）
 run: ## 单次巡检：make run SCENARIO=S1 SOURCE=http
 	$(PY) -m staguard run --scenario $(SCENARIO) $(if $(SOURCE),--source $(SOURCE),)
 
-run-all: ## 依次巡检全部场景（用于演示与回归）
+run-all: ## 依次巡检全部场景（用于批量巡检与回归）
 	@for s in S0 S1 S2 S3 S4 S5 S6; do \
 		echo "=== $$s ==="; \
 		$(PY) -m staguard run --scenario $$s --log-level WARNING >/dev/null; \
@@ -62,11 +62,11 @@ serve: ## 启动巡检 API（含健康探针）
 schedule: ## 常驻定时巡检（每 30 分钟）
 	$(PY) -m staguard schedule --interval 30
 
-demo: gen-data test ## 一键演示：生成数据 + 跑测试
+demo: gen-data test ## 一键跑通全流程：生成数据 + 跑测试 + 巡检 + 归因评测
 	$(PY) -m staguard run --scenario S0 --log-level WARNING >/dev/null
 	$(PY) -m staguard run --scenario S1 --log-level WARNING >/dev/null
 	COLUMNS=200 $(PY) -m staguard eval
-	@echo "演示完成：reports/S0（正常态）与 reports/S1（依赖故障）可直接打开查看"
+	@echo "已完成：reports/S0（正常态）与 reports/S1（依赖故障）可直接打开查看"
 
 docker-build: ## 构建镜像
 	docker build -t staguard:local .

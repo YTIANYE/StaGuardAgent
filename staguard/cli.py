@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 
 
 def _bootstrap(config_dir: Path | None, log_level: str, log_format: str):
-    setup_logging(log_level, log_format)
     settings = build_settings(config_dir) if config_dir else build_settings()
+    setup_logging(log_level, log_format, log_dir=settings.app.log_dir)
     database = Database(settings.app.db_url)
     database.init_schema()
     return settings, Repository(database)
@@ -184,8 +184,8 @@ def mock_monitor(
     """启动模拟监控数据接口（供 HTTP 采集通道使用）。"""
     import uvicorn
 
-    build_settings(config_dir) if config_dir else build_settings()
-    setup_logging("INFO", "console")
+    settings = build_settings(config_dir) if config_dir else build_settings()
+    setup_logging("INFO", "console", log_dir=settings.app.log_dir)
     console.print(f"[green]模拟监控接口：http://{host}:{port}/docs[/green]")
     uvicorn.run("staguard.mockapi.app:app", host=host, port=port, log_level="warning")
 

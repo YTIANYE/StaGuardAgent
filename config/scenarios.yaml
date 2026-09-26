@@ -3,7 +3,8 @@
 # 一个场景 = 一个可以讲清楚的故事 + 一个明确的期望结论。
 # 它同时承担两个职责：
 #   1. 数据源：为模拟数据集注入特定故障形态；
-#   2. 评测基准：`expected_root_cause` 是 AI 归因质量的评分依据（见 tests/test_attribution_eval.py）。
+#   2. 评测基准：`expected_root_cause` 是 AI 归因质量的评分依据
+#      （评测实现在 staguard/evaluation.py，端到端校验在 tests/test_e2e.py）。
 #
 # 数据分两层生成，对应真实世界的两种存储：
 #   - 长期归档（baseline_history_days @ baseline_interval_seconds）：

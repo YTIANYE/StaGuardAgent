@@ -1,4 +1,4 @@
-"""AI 智能分析包：证据包 -> 大模型归因 -> 校验 -> 三级降级。"""
+"""AI 智能分析包：证据包 -> 大模型归因 -> 校验 -> 降级兜底（两级）。"""
 
 from .analyzer import AIAnalyzer
 from .evidence import build_evidence

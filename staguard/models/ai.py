@@ -104,7 +104,11 @@ class AIAnalysis(BaseModel):
     summary: str = ""
     """本次巡检风险总结。"""
     findings: list[Finding] = Field(default_factory=list)
-    """所有异常项的智能根因推理。"""
+    """根因推理结论。粒度是根因簇：每个簇一条，合起来覆盖本次全部未抑制异常。
+
+    被抑制的异常（同一服务同一指标上已有更严重的那条）不单独出结论——
+    它们的成因由代表它们的那个簇给出，被抑制项本身在报告折叠区可见。
+    """
     trend: TrendJudgement = Field(default_factory=TrendJudgement)
     """稳定性趋势判断。"""
     stability_advice: list[str] = Field(default_factory=list)
