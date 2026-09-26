@@ -309,6 +309,60 @@ def test_recurrence_flag_comes_from_history(settings: Settings):
     assert all(anomaly.is_recurring for anomaly in cluster.all_anomalies())
 
 
+def test_model_cannot_declare_recurrence(settings: Settings):
+    """复发是检索出来的事实，不接受模型自行声明。
+
+    实测踩过：在一个没有任何历史同类事件的场景里，模型写了 `is_recurring=true`，
+    报告于是出现「历史复发，说明上次的处置并未根治」。
+    """
+    analyzer = AIAnalyzer(settings, DisabledProvider("测试"))
+    cluster = _cluster("RES-02", "payment-svc", MetricName.MEM_USAGE)
+    _mark_recurrence([cluster], {})  # 没有历史同类事件
+
+    payload = {
+        "summary": "x",
+        "findings": [
+            {
+                "cluster_id": "CLUS-01",
+                "root_cause_category": "resource_bottleneck",
+                "root_cause": "x",
+                "is_recurring": True,
+            }
+        ],
+    }
+    analysis, repairs = analyzer._validate(payload, [cluster], FallbackAttributor([]))  # noqa: SLF001
+    assert analysis is not None
+    assert analysis.findings[0].is_recurring is False
+    assert any("复发" in item for item in repairs)
+
+
+def test_history_recurrence_overrides_model_denial(settings: Settings):
+    """反向也要对齐：检索认为是复发时，模型的 false 同样被校正。"""
+    from staguard.ai.history import HistoryMatch
+
+    analyzer = AIAnalyzer(settings, DisabledProvider("测试"))
+    cluster = _cluster("RES-02", "payment-svc", MetricName.MEM_USAGE)
+    _mark_recurrence(
+        [cluster],
+        {"CLUS-01": [HistoryMatch("payment-svc.mem_usage", "run-old", "resource_bottleneck", "x", 0.8, "P1")]},
+    )
+
+    payload = {
+        "summary": "x",
+        "findings": [
+            {
+                "cluster_id": "CLUS-01",
+                "root_cause_category": "resource_bottleneck",
+                "root_cause": "x",
+                "is_recurring": False,
+            }
+        ],
+    }
+    analysis, _ = analyzer._validate(payload, [cluster], FallbackAttributor([]))  # noqa: SLF001
+    assert analysis is not None
+    assert analysis.findings[0].is_recurring is True
+
+
 @pytest.mark.parametrize(
     ("left", "right", "expected"),
     [

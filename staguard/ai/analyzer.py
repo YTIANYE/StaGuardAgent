@@ -208,7 +208,34 @@ class AIAnalyzer:
 
         repairs.extend(self._guard_evidence(analysis, clusters))
         repairs.extend(self._fill_missing(analysis, clusters, fallback))
+        repairs.extend(self._sync_recurrence(analysis, clusters))
         return analysis, repairs
+
+    def _sync_recurrence(
+        self, analysis: AIAnalysis, clusters: list[AnomalyCluster]
+    ) -> list[str]:
+        """把模型声明的复发标记校正为**历史检索的结果**。
+
+        复发与否是可验证的事实，历史检索已经算出来了（`_mark_recurrence`），
+        不该由模型自行声明——和「评分由规则算、AI 只微调」是同一个道理。
+        实测踩过：在一个没有任何历史同类事件的场景里，模型写了 `is_recurring=true`，
+        报告于是出现「历史复发，说明上次的处置并未根治」，
+        属于典型的「看起来很专业、但站不住」的结论。
+        """
+        computed = {
+            cluster.cluster_id: any(a.is_recurring for a in cluster.all_anomalies())
+            for cluster in clusters
+        }
+        repairs: list[str] = []
+        for finding in analysis.findings:
+            actual = computed.get(finding.cluster_id, False)
+            if finding.is_recurring != actual:
+                repairs.append(
+                    f"{finding.cluster_id} 的复发标记与历史检索不一致"
+                    f"（模型 {finding.is_recurring} / 检索 {actual}），已按检索结果校正"
+                )
+                finding.is_recurring = actual
+        return repairs
 
     def _guard_evidence(self, analysis: AIAnalysis, clusters: list[AnomalyCluster]) -> list[str]:
         """把模型编造的 evidence_id 清掉。
@@ -270,15 +297,15 @@ class AIAnalyzer:
     ) -> dict[str, list[HistoryMatch]]:
         if repo is None or ctx is None:
             return {}
-        # 排除同一数据窗口的历史：重跑同一个故障窗口不是「复发」，
-        # 标成复发会让读者误以为修复无效，属于制造错误信息。
-        exclude_same_window = (
-            getattr(ctx, "scenario_id", None),
-            ctx.window.end.isoformat(timespec="seconds"),
-        )
+        # 排除同一时间窗口的历史：复发意味着「同类问题在之后的窗口里又出现」，
+        # 同一个窗口被反复看（重跑、回归、评测、不同切片）都不是复发。
+        # 判据只能是窗口本身——按场景或按数据切片排除都挡不住跨场景的同窗口匹配：
+        # S3 的流量突增与 S1 的依赖故障共享一批 `服务.指标` token，
+        # 于是 S3 的报告里会写「历史复发，说明上次的处置并未根治」。
+        exclude_window_end = ctx.window.end.isoformat(timespec="seconds")
         try:
             recent = repo.recent_clusters(
-                limit=200, exclude_run_id=run_id, exclude_same_window=exclude_same_window
+                limit=200, exclude_run_id=run_id, exclude_window_end=exclude_window_end
             )
         except Exception:  # noqa: BLE001 - 历史检索失败不应阻断归因
             logger.warning("历史事件检索失败，跳过复发识别", exc_info=True)
