@@ -253,7 +253,7 @@ def schedule(
 @app.command("sample")
 def export_samples(
     output_dir: Annotated[Path, typer.Option("--out", "-o", help="样例输出目录")] = Path("docs/samples"),
-    scenarios: Annotated[str, typer.Option("--scenarios", help="逗号分隔的场景编号")] = "S0,S1,S3,S4,S6",
+    scenarios: Annotated[str, typer.Option("--scenarios", help="逗号分隔的场景编号")] = "S0,S1,S2,S3,S4,S5,S6",
     source: Annotated[str | None, typer.Option("--source")] = None,
     config_dir: Annotated[Path | None, typer.Option("--config-dir")] = None,
 ) -> None:
@@ -274,12 +274,14 @@ def export_samples(
     table.add_column("异常", justify="right")
     table.add_column("AI 模式")
 
+    modes: set[str] = set()
     for raw in scenarios.split(","):
         scenario_id = raw.strip()
         if not scenario_id:
             continue
         report = orchestrator.run(scenario_id=scenario_id, source_name=source, notify=False)
         mode = "rule-fallback" if report.ai_meta.degraded else "llm"
+        modes.add(mode)
         path = output_dir / f"{scenario_id}-{mode}.md"
         path.write_text(render_markdown(report), encoding="utf-8")
         table.add_row(
@@ -288,7 +290,7 @@ def export_samples(
             f"[yellow]{mode}[/yellow]" if mode == "rule-fallback" else f"[green]{mode}[/green]",
         )
     console.print(table)
-    if any("rule-fallback" in p.name for p in output_dir.glob("*.md")):
+    if modes == {"rule-fallback"}:
         console.print(
             "[dim]提示：配置 STAGUARD_LLM_API_KEY 后重跑本命令，会额外产出 -llm 版本用于对比。[/dim]"
         )
