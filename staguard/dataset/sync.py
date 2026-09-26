@@ -66,6 +66,9 @@ def build_all(settings: Settings, repo: Repository, archive: bool = True, files:
         store = FileMetricStore(settings.app.data_dir / "metrics")
         written = export_scenarios(settings, store)
         logger.info("已导出 %d 个场景数据集文件", len(written))
+    # 一次性写入两百多万行之后刷新查询计划统计信息，
+    # 否则紧接着的第一次巡检会因为错误的执行计划慢一个数量级（见 Database.optimize）。
+    repo.db.optimize()
     return report
 
 

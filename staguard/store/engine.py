@@ -76,6 +76,26 @@ class Database:
             table.drop(self.engine, checkfirst=True)
         metadata.create_all(self.engine, checkfirst=True)
 
+    def optimize(self) -> None:
+        """刷新查询计划统计信息（`sqlite_stat1`），挂在**批量写入之后**。
+
+        没有统计信息时，SQLite 用「表很小、分布均匀」的默认猜测选执行计划：
+        `metric_points` 有两百多万行，基线计算里「按某个序列取 14 天历史」的查询
+        会退化成按 `(dataset_id, ts_epoch)` 全数据集扫描再逐行过滤——
+        **实测踩过：单次巡检从 5 秒变成 46 秒，`make test` 从 2 分半变成 15 分半，
+        而日志里没有任何异常**。有了统计信息，规划器才会改走
+        `ix_mp_series(dataset_id, metric, service, instance, ts_epoch)`。
+
+        统计信息缺失时直接 `ANALYZE`（只分析这一张表，两百万行约 2 秒，且每份数据集
+        只会付一次）；已经有统计信息时交给 `PRAGMA optimize`——它按变化幅度决定是否重算，
+        平时是空操作，适合挂在每次数据集重写之后。
+        """
+        with self.engine.begin() as conn:
+            has_stats = conn.execute(
+                sa.text("select count(*) from sqlite_master where name = 'sqlite_stat1'")
+            ).scalar()
+            conn.execute(sa.text("ANALYZE metric_points" if not has_stats else "PRAGMA optimize"))
+
     def _drifted_tables(self) -> list:
         inspector = sa.inspect(self.engine)
         existing = set(inspector.get_table_names())

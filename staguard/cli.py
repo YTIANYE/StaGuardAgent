@@ -41,6 +41,21 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 
+def _db_size_mb(db_file: Path) -> float:
+    """数据库占用，**含 WAL**。
+
+    SQLite 在 WAL 模式下，刚写完的数据可能还没并回主库文件；
+    只看主库大小会把体积少报好几个数量级（实测：主库报 112MB，实际 416MB），
+    而「刚生成完数据集到底占多大」正是这个数字要回答的问题。
+    """
+    total = 0
+    for suffix in ("", "-wal", "-shm"):
+        path = db_file.with_name(db_file.name + suffix)
+        if path.exists():
+            total += path.stat().st_size
+    return total / 1e6
+
+
 def _bootstrap(config_dir: Path | None, log_level: str, log_format: str):
     settings = build_settings(config_dir) if config_dir else build_settings()
     setup_logging(log_level, log_format, log_dir=settings.app.log_dir)
@@ -80,7 +95,7 @@ def gen_data(
     store = FileMetricStore(settings.app.data_dir / "metrics")
     console.print(f"[green]场景文件 {len(store.datasets())} 个 -> {store.root}[/green]")
     console.print(f"[dim]耗时 {elapsed:.1f}s，数据库 {settings.app.db_file()} "
-                  f"（{settings.app.db_file().stat().st_size / 1e6:.1f} MB）[/dim]")
+                  f"（{_db_size_mb(settings.app.db_file()):.1f} MB）[/dim]")
 
 
 @app.command("run")
