@@ -17,7 +17,6 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "structlog>=24.1",
-    "tenacity>=8.3",
     "openai>=1.35",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",

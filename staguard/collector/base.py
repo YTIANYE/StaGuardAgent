@@ -32,8 +32,6 @@ class CollectRequest(BaseModel):
     window_minutes: int = 30
     history_minutes: int = 180
     granularity_seconds: int = 60
-    services: list[str] | None = None
-    metrics: list[str] | None = None
 
     @property
     def window(self) -> TimeWindow:

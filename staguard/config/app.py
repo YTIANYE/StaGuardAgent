@@ -48,7 +48,6 @@ class AppConfig(BaseSettings):
     """动态基线回看天数。hour-of-week 基线至少要 1 周样本，默认取 2 周。"""
     baseline_min_samples: int = 30
     """低于该样本量即回退静态阈值。"""
-    max_instances_per_service: int = 6
 
     # ---- 数据源 ----
     default_source: Literal["file", "http"] = "file"
@@ -76,7 +75,6 @@ class AppConfig(BaseSettings):
     llm_timeout_s: float = 60.0
     llm_max_attempts: int = 2
     llm_temperature: float = 0.2
-    llm_max_concurrency: int = 3
     llm_max_tokens: int = 4096
     """单次输出上限。
 

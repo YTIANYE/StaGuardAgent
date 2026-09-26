@@ -43,10 +43,6 @@ class HttpMetricSource(MetricSource):
             "from": from_epoch(to_epoch(request.fetch_start)).isoformat(timespec="seconds"),
             "to": from_epoch(to_epoch(request.fetch_end)).isoformat(timespec="seconds"),
         }
-        if request.services:
-            params["services"] = ",".join(request.services)
-        if request.metrics:
-            params["metrics"] = ",".join(request.metrics)
 
         with CollectTimer() as timer:
             try:

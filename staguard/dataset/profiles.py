@@ -74,7 +74,10 @@ NOISE_CV: dict[MetricName, float] = {
 P95_RATIO = 2.25
 P99_RATIO = 3.35
 
-VALID_RANGE: dict[MetricName, tuple[float, float]] = {
+# 生成器采样范围：决定正常态与故障注入时各类指标的取值区间。
+# 它与 normalize 的 VALID_RANGE 语义不同，不能互相替换——后者是「物理上不可能的上界」，
+# 要宽得多（防止把真实的高值当脏数据剔除）；这里窄，是为了让生成的数据落在合理水位内。
+GENERATION_RANGE: dict[MetricName, tuple[float, float]] = {
     MetricName.QPS: (0.0, 100_000.0),
     MetricName.SUCCESS_RATE: (0.0, 100.0),
     MetricName.ERROR_COUNT: (0.0, 10_000_000.0),

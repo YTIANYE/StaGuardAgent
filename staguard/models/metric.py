@@ -251,7 +251,7 @@ def percentile(values: list[float], q: float) -> float:
 class DataQualityIssue(BaseModel):
     """数据质量问题。巡检结论的置信度由它决定——数据不可信时降置信度，而不是硬报异常。"""
 
-    kind: Literal["missing", "out_of_range", "stale", "interpolated", "negative"]
+    kind: Literal["missing", "out_of_range"]
     service: str
     instance: str
     metric: MetricName

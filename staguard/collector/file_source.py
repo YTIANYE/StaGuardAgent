@@ -32,8 +32,6 @@ class FileMetricSource(MetricSource):
                 )
 
             dataset = self.store.load(request.dataset_id)
-            metric_filter = set(request.metrics) if request.metrics else None
-            service_filter = set(request.services) if request.services else None
             start_epoch = to_epoch(request.fetch_start)
             end_epoch = to_epoch(request.fetch_end)
 
@@ -41,10 +39,6 @@ class FileMetricSource(MetricSource):
             declared_units: dict[str, str] = {}
             series_keys: list[str] = []
             for blob in dataset.series:
-                if service_filter and blob.service not in service_filter:
-                    continue
-                if metric_filter and blob.metric not in metric_filter:
-                    continue
                 key = f"{blob.service}/{blob.instance}/{blob.metric}"
                 series_keys.append(key)
                 declared_units[key] = blob.unit or MetricName(blob.metric).unit

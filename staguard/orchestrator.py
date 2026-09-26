@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Iterator
@@ -52,6 +51,7 @@ from .report import build_comparison, build_history, render_markdown
 from .rules import EvalContext, RuleEngine, build_context
 from .scoring import ScoreCalculator
 from .store import Database, Repository
+from .utils.logging import bind_run_context, clear_run_context
 from .utils.timeutil import now, parse_iso, run_id_for, to_epoch
 
 logger = logging.getLogger(__name__)
@@ -115,8 +115,29 @@ class InspectionOrchestrator:
         run_id: str | None = None,
         notify: bool = True,
     ) -> InspectionReport:
-        settings = self.settings
+        """执行一次巡检。
+
+        run_id 在入口处就绑到日志上下文上，覆盖 CLI / HTTP / 调度器三条触发路径。
+        只在调度器里绑定的话，手动触发的巡检日志会丢掉 run_id——
+        而「按 run_id 追查一轮巡检发生了什么」正是日志的主要用途。
+        """
         anchor = window_end or self._resolve_window_end()
+        resolved_run_id = run_id or run_id_for(anchor, scenario_id)
+        bind_run_context(resolved_run_id, scenario_id)
+        try:
+            return self._execute(anchor, resolved_run_id, scenario_id, source_name, notify)
+        finally:
+            clear_run_context()
+
+    def _execute(
+        self,
+        anchor: datetime,
+        run_id: str,
+        scenario_id: str | None,
+        source_name: str | None,
+        notify: bool,
+    ) -> InspectionReport:
+        settings = self.settings
         window = TimeWindow(
             start=anchor - timedelta(minutes=settings.window_minutes),
             end=anchor,
@@ -440,16 +461,3 @@ class InspectionOrchestrator:
 def _fingerprint(points: list) -> tuple[int, int, int]:
     epochs = [to_epoch(point.ts) for point in points]
     return (len(points), min(epochs) if epochs else 0, max(epochs) if epochs else 0)
-
-
-def run_inspection(
-    scenario_id: str | None = None,
-    source_name: str | None = None,
-    settings: Settings | None = None,
-) -> InspectionReport:
-    """便捷入口：CLI / HTTP 接口 / 调度器共用。"""
-    return InspectionOrchestrator(settings).run(scenario_id=scenario_id, source_name=source_name)
-
-
-def report_to_json(report: InspectionReport) -> str:
-    return json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2, default=str)

@@ -17,8 +17,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import Settings
 from .orchestrator import InspectionOrchestrator
-from .store import Database, Repository
-from .utils.logging import bind_run_context, clear_run_context
+from .store import Repository
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +61,11 @@ class InspectionScheduler:
         self.scheduler.add_job(self._job, trigger=trigger, id=JOB_ID, replace_existing=True, name="稳定性巡检")
         self.scheduler.start()
         logger.info(
-            "定时巡检已启动：%s，场景 %s，数据源 %s",
+            "定时巡检已启动：%s，范围 %s，数据源 %s",
             f"cron `{cron}`" if cron else f"每 {interval_minutes} 分钟",
-            self.scenario_id or "全部",
+            # 不指定场景时巡检的是「当前水位」，不是「全部场景」——
+            # 原来写「全部」会让人以为它在轮询所有场景，日志本身在撒谎。
+            f"回放 {self.scenario_id}" if self.scenario_id else "当前水位",
             self.source_name or self.settings.app.default_source,
         )
         if run_immediately:
@@ -79,12 +80,11 @@ class InspectionScheduler:
         try:
             orchestrator = InspectionOrchestrator(self.settings, self.repo)
             report = orchestrator.run(scenario_id=self.scenario_id, source_name=self.source_name)
-            bind_run_context(report.run.run_id, self.scenario_id)
             logger.info(
-                "定时巡检完成：评分 %.1f，异常 %d 条，状态 %s",
-                report.score.total, report.run.anomaly_count, report.run.status.label,
+                "定时巡检 %s 完成：评分 %.1f，异常 %d 条，状态 %s",
+                report.run.run_id, report.score.total, report.run.anomaly_count,
+                report.run.status.label,
             )
-            clear_run_context()
         except Exception:  # noqa: BLE001 - 调度器必须活下去
             logger.exception("定时巡检执行失败，已跳过本次")
 
@@ -96,12 +96,3 @@ class InspectionScheduler:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
             logger.info("定时巡检调度器已停止")
-
-
-def build_default_scheduler(settings: Settings | None = None, scenario_id: str | None = None) -> InspectionScheduler:
-    from .config import build_settings
-
-    settings = settings or build_settings()
-    database = Database(settings.app.db_url)
-    database.init_schema()
-    return InspectionScheduler(settings, Repository(database), scenario_id)

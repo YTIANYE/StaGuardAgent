@@ -185,7 +185,7 @@ class SubScoreSpec(BaseModel):
 
 class ScoreCapSpec(BaseModel):
     condition: str
-    """支持的封顶条件：has_p1 / p1_on_critical / p1_count_ge:2 / change_induced_p1。"""
+    """支持的封顶条件：has_p1 / p1_on_critical / p1_count_ge:N（N 为阈值）。"""
     max: float
     reason: str
 

@@ -33,11 +33,11 @@ from ..models import MetricName, MetricPoint
 from ..utils.timeutil import from_epoch, now, parse_iso, to_epoch
 from .profiles import (
     BUSINESS_ERROR_RATE_BASE,
+    GENERATION_RANGE,
     NOISE_CV,
     P95_RATIO,
     P99_RATIO,
     SUCCESS_RATE_BASE,
-    VALID_RANGE,
     clamp,
     daily_factor,
     profile_for,
@@ -227,7 +227,7 @@ class ScenarioWorld:
             # 夹到物理合法区间：成功率不会超过 100%，业务错误率不会为负。
             # 不夹的话高斯噪声会造出 100.02% 这种值，被清洗模块当成脏数据剔除，
             # 于是干净场景凭空多出一堆数据质量问题——合成数据的自伤。
-            low, high = VALID_RANGE[metric]
+            low, high = GENERATION_RANGE[metric]
             out.append(clamp(base * noise, low, high))
         return out
 

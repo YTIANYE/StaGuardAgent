@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import Counter
 from typing import Any
@@ -39,6 +40,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     database.init_schema()
     repo = Repository(database)
     counters: Counter[str] = Counter()
+    # 正在执行的巡检请求数。HPA 用它而不是 CPU 扩容：巡检是 IO 密集（读时序库、等大模型），
+    # CPU 打满之前请求早就开始排队了，按 CPU 扩容永远慢半拍。
+    inflight_lock = threading.Lock()
+    inflight = {"count": 0}
 
     app = FastAPI(
         title="StaGuardAgent API",
@@ -89,6 +94,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "# HELP staguard_uptime_seconds 进程存活时长",
             "# TYPE staguard_uptime_seconds gauge",
             f"staguard_uptime_seconds {int(time.time() - STARTED_AT)}",
+            "# HELP staguard_pending_inspections 正在执行的巡检请求数（HPA 扩容依据）",
+            "# TYPE staguard_pending_inspections gauge",
+            f"staguard_pending_inspections {inflight['count']}",
         ]
         for reason, count in counters.items():
             lines.append(f'staguard_inspection_triggers_total{{result="{reason}"}} {count}')
@@ -110,27 +118,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if source and source not in ("file", "http"):
             raise HTTPException(status_code=400, detail="source 只支持 file 或 http")
 
+        with inflight_lock:
+            inflight["count"] += 1
         try:
-            report = InspectionOrchestrator(settings, repo).run(
-                scenario_id=scenario_id, window_end=anchor, source_name=source
-            )
-        except Exception as exc:  # noqa: BLE001 - 编排器内部已做阶段隔离，这里只兜底
-            counters["error"] += 1
-            logger.exception("HTTP 触发的巡检失败")
-            raise HTTPException(status_code=500, detail=f"巡检执行失败：{exc}") from exc
+            try:
+                report = InspectionOrchestrator(settings, repo).run(
+                    scenario_id=scenario_id, window_end=anchor, source_name=source
+                )
+            except Exception as exc:  # noqa: BLE001 - 编排器内部已做阶段隔离，这里只兜底
+                counters["error"] += 1
+                logger.exception("HTTP 触发的巡检失败")
+                raise HTTPException(status_code=500, detail=f"巡检执行失败：{exc}") from exc
 
-        counters["success" if report.run.status.value != "failed" else "failed"] += 1
-        return {
-            "run_id": report.run.run_id,
-            "status": report.run.status.value,
-            "score": report.score.total,
-            "grade": report.score.grade,
-            "anomalies": report.run.anomaly_count,
-            "level_counts": report.run.level_counts,
-            "ai_degraded": report.ai_meta.degraded,
-            "duration_ms": report.run.duration_ms,
-            "report_url": f"/api/v1/inspections/{report.run.run_id}/report?format=md",
-        }
+            counters["success" if report.run.status.value != "failed" else "failed"] += 1
+            return {
+                "run_id": report.run.run_id,
+                "status": report.run.status.value,
+                "score": report.score.total,
+                "grade": report.score.grade,
+                "anomalies": report.run.anomaly_count,
+                "level_counts": report.run.level_counts,
+                "ai_degraded": report.ai_meta.degraded,
+                "duration_ms": report.run.duration_ms,
+                "report_url": f"/api/v1/inspections/{report.run.run_id}/report?format=md",
+            }
+        finally:
+            with inflight_lock:
+                inflight["count"] -= 1
 
     @app.get("/api/v1/inspections", summary="历史巡检列表")
     def list_inspections(limit: int = Query(default=20, ge=1, le=200)) -> dict[str, Any]:
