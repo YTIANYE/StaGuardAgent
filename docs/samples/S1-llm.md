@@ -6,7 +6,7 @@
 
 - **巡检窗口**：2026-09-25 09:30~10:00（30分钟），粒度 60s
 - **覆盖范围**：8 个服务 / 15 个实例
-- **执行耗时**：12.9s
+- **执行耗时**：12.1s
 
 ### 稳定性评分
 
@@ -27,16 +27,16 @@
 
 ## 二、风险总结
 
-本次异常以 bank-channel 为最下游起点，连接池使用率打满（99%）并伴随 P95 延时飙升至 3495ms、成功率跌至 92%，随后沿 payment-svc → order-svc → gateway 逐级向上传导，导致 gateway 成功率跌至 93.56%、P95 延时 1554ms。全链路 4 个服务、10 个实例同时出现连接池水位越线与延时放大，属于典型的资源瓶颈型级联故障，规则给出的 E 级严重定级与影响面基本相符。
+本次异常以 bank-channel 为最下游源头：其连接池使用率打满至 99%、P95 延时飙升至 3495ms（基线 270ms），并沿 bank-channel -> payment-svc -> order-svc -> gateway 逐级向上传导，导致 payment-svc 连接池打满 96%~99%、业务错误率升至 7.5%，order-svc/gateway 成功率跌至 91.9%/93.6%、P95 延时超 1.5s。全链路 4 个服务、10 个实例同时劣化，规则评分 20.4（E 级）与实际影响基本相符。两条变更均在异常起始前 41 分钟以上，不构成本轮根因。
 
 - **趋势判断**：整体平稳
-  - 依据：各异常指标的 series 均显示 trend=stable，且 first/last 值已回落至基线附近（如 bank-channel conn_usage first=69.17、last=58.93；gateway success_rate first=99.96、last=99.95），说明异常窗口内已出现恢复迹象，当前处于异常后的回落阶段。
-  - 预测：若 bank-channel 连接池容量不做调整，在下一波支付高峰（预计 1 小时内）连接池将再次打满，届时 payment-svc 成功率可能再次跌至 90% 以下，gateway 错误预算将继续快速消耗；建议在下一高峰前完成连接池扩容或限流配置。
+  - 依据：各异常指标 series 的 trend 均为 stable，first/last 值显示异常在窗口内已从峰值回落（如 bank-channel conn_usage first 69.17 -> last 58.93，gateway P95 first 46ms -> last 65ms），说明异常集中在 09:36-09:59 区间，窗口末段已开始恢复。
+  - 预测：若 bank-channel 连接池容量不调整，按当前基线使用率 63% 与峰值 99% 的余量推算，下一波交易高峰（约 1 小时内）bank-channel 连接池将再次打满，payment-svc 连接池（当前峰值 99%）将同步触顶，gateway 成功率可能再次跌破 94%。
 - **证据不足之处**：
-  - bank-channel 是拓扑中的最下游服务（无更下游依赖），因此无法从证据中区分「bank-channel 自身处理能力不足」与「其外部依赖（银行侧接口）异常」——两者都会表现为连接池打满与延时飙升，需结合银行侧日志进一步确认。
-  - 证据包中未提供 QPS/流量指标，无法判断本次异常是否由流量突增触发；若存在流量同向上涨，则触发机制可能更接近 traffic_fluctuation，但当前证据不足以支撑该判断。
-  - changes 中两条变更（gateway 健康检查间隔调整 276 分钟前、bank-channel 超时时间调整 41 分钟前）均不在异常起始前 30 分钟窗口内，不能作为根因；但 bank-channel 超时时间由 30s 调整为 25s 是否加剧了连接池回收压力，证据不足，仅作背景信息。
-  - 规则假设认为 bank-channel 偏离最显著，本结论与其一致；但 propagation_path 中 gateway 位于最上游，实际影响传播方向为 bank-channel → payment-svc → order-svc → gateway，与拓扑调用方向一致。
+  - bank-channel 在拓扑中已是最下游（无更下游依赖），无法从证据区分其连接池打满是「自身处理能力不足」还是「其对接的银行外部系统响应变慢」，因此按口径归为 resource_bottleneck。
+  - 两条变更（gateway 健康检查间隔 276 分钟前、bank-channel 超时 41 分钟前）均不在异常起始前 30 分钟窗口内，不能作为根因；bank-channel 超时由 30s 调至 25s 是否加剧了连接占用，证据不足，仅作背景。
+  - BIZ-06 链路证据的 baseline_confidence 为 low（static_fallback），其链路健康度绝对值可信度有限，但方向性（payment-svc 为最弱环节）与实例级证据一致。
+  - 规则 rule_hypothesis 认为 bank-channel 偏离最显著，本结论与其一致；但无法排除 bank-channel 与 payment-svc 同时受第三方（如银行侧限流）影响，缺少外部依赖侧指标佐证。
 
 ## 三、异常清单
 
@@ -143,12 +143,12 @@
 - **信号规模**：50 条异常，涉及 4 个服务（bank-channel、gateway、order-svc、payment-svc）
 - **传播路径**：`gateway → order-svc → payment-svc → bank-channel`　（数据流方向，故障影响由此向上游扩散）
 - **规则假设**：4 个服务出现关联异常，疑似同一根因传导，bank-channel 的偏离最显著
-- **AI 根因**：**资源瓶颈** — bank-channel 连接池使用率打满至 99%（基线 63.2%），新请求被拒绝或排队，导致其自身成功率跌至 92%、P95 延时升至 3495ms，并沿 payment-svc → order-svc → gateway 逐级向上传导。（置信度 82%）
+- **AI 根因**：**资源瓶颈** — bank-channel 作为链路最下游，其连接池使用率被用到 99% 打满、P95 延时升至 3495ms，自身处理能力耗尽后向上游 payment-svc、order-svc、gateway 逐级传导超时与失败。（置信度 72%）
 - **AI 认定的根因服务**：`bank-channel`
-- **影响面**：支付链路整体不可用：gateway 成功率由 99.97% 跌至 93.56%（错误预算消耗达允许值 287 倍），order-svc 成功率跌至 91.95%，payment-svc 成功率跌至 90%、业务错误率由 0.07% 升至 7.5%，bank-channel 成功率跌至 92%。全链路 4 个服务、10 个实例受影响，P95 延时放大 20~25 倍，用户侧表现为下单/支付超时与失败。
-- **建议责任方**：支付组（bank-channel 对接方）+ 交易平台组（gateway/order-svc 侧限流降级）
+- **影响面**：gateway 三个实例成功率由 99.97% 跌至 93.56%（错误预算消耗达允许值 287 倍），P95 延时由 ~60ms 升至 ~1555ms；order-svc 成功率跌至 91.9%、P95 延时 1974ms；payment-svc 成功率跌至 90%、业务错误率升至 7.5%、连接池打满；bank-channel 自身成功率跌至 92%。链路 payment-svc->bank-channel 健康度 82.8%，gateway 侧链路健康度仅 71.26%，交易主链路整体不可用。
+- **建议责任方**：支付组（bank-channel 对接方）
 
-<details><summary>证据引用（32 条）</summary>
+<details><summary>证据引用（14 条）</summary>
 
 - `RES-04:bank-channel/bank-channel-0/conn_usage`
 - `PERF-02:bank-channel/bank-channel-0/latency_p95`
@@ -156,13 +156,13 @@
 - `BIZ-01:bank-channel/bank-channel-0/success_rate`
 - `RES-04:payment-svc/payment-svc-0/conn_usage`
 - `RES-04:payment-svc/payment-svc-1/conn_usage`
-- `BIZ-01:payment-svc/payment-svc-0/success_rate`
-- `BIZ-01:payment-svc/payment-svc-1/success_rate`
 - `BIZ-02:payment-svc/payment-svc-0/business_error_rate`
 - `BIZ-02:payment-svc/payment-svc-1/business_error_rate`
-- `PERF-02:payment-svc/payment-svc-0/latency_p95`
-- `PERF-02:payment-svc/payment-svc-1/latency_p95`
-- …其余 20 条同类证据（见 JSON 报告）
+- `BIZ-01:payment-svc/payment-svc-0/success_rate`
+- `BIZ-01:order-svc/order-svc-0/success_rate`
+- `PERF-02:order-svc/order-svc-0/latency_p95`
+- `BIZ-01:gateway/gateway-0/success_rate`
+- …其余 2 条同类证据（见 JSON 报告）
 
 </details>
 
@@ -171,24 +171,24 @@
 ### 立即止血（本次窗口内）
 
 - **CLUS-01 · 资源瓶颈**
-  - 立即对 bank-channel 连接池做紧急扩容（提高 max connections 上限或增加实例数），并临时下调 payment-svc 对 bank-channel 的并发调用量，避免连接池持续打满。
+  - 立即对 bank-channel 连接池做紧急扩容（提高 max connections 上限）并临时降级非核心交易请求，缓解 99% 打满状态。
 
 ### 短期加固（本周内）
 
-- [CLUS-01] 在 payment-svc 侧对 bank-channel 调用增加熔断/降级策略（如失败率超阈值快速失败并返回可重试提示），防止连接池耗尽向上游扩散。
-- [CLUS-01] 排查 bank-channel 连接池打满的根因：确认是下游银行接口响应变慢导致连接占用时间过长，还是并发请求量突增；若为前者，需与银行对接方确认其侧状态。
-- [CLUS-01] 短期内在 gateway/order-svc 层增加对支付链路的超时与重试上限控制，避免长尾请求堆积放大连接占用。
+- [CLUS-01] 排查 bank-channel 侧慢请求堆积原因：抓取 09:36-10:00 窗口内 P99 达 5149ms 的请求样本，确认是银行侧响应变慢还是本地连接泄漏/未释放。
+- [CLUS-01] 对 payment-svc 到 bank-channel 的调用增加熔断与快速失败（超时下调至 1s 级 + 并发舱壁隔离），避免下游慢调用把 payment-svc 连接池拖满。
+- [CLUS-01] 复盘 bank-channel 连接池容量规划：当前基线使用率已达 63%，峰值余量不足，需按峰值 QPS 重新核算上限。
 
 ### 长期治理
 
-- 为 bank-channel 连接池设置基于水位（如 80%）的自动扩容或告警联动，避免再次出现 99% 打满。
-- 在 payment-svc → bank-channel 链路上配置熔断与舱壁隔离，防止单一外部依赖拖垮整条支付链路。
-- 对 gateway/order-svc/payment-svc 的连接池上限做容量评审，确认当前配置能覆盖历史峰值流量的 1.5 倍。
-- 建立支付链路端到端 SLO（成功率、P95 延时）与错误预算告警，缩短此类级联故障的发现时间。
+- 为 bank-channel 连接池设置基于队列等待时长的自动扩容策略，而非固定上限，避免下游慢响应时连接被长期占用。
+- 在 payment-svc -> bank-channel 之间引入熔断器与并发隔离舱壁，防止单一外部渠道故障拖垮整个支付链路。
+- 对 gateway/order-svc/payment-svc 的连接池使用率建立分级告警（80% 预警、90% 严重），并联动自动降级开关。
+- 梳理全链路超时预算：bank-channel 25s 超时明显长于上游 gateway 的容忍度，需按调用链逐跳收敛超时时间。
 
 ## 七、稳定性趋势
 
-**对比对象**：`run-20260925-100000-S0`（2026-09-26T17:36+08:00）
+**对比对象**：`run-20260925-100000-S0`（2026-09-27T01:54+08:00）
 
 - 评分变化：**-76.0 分**（较上次下降）
 - 稳定性评分较上次下降 76.0 分；新增异常 59 项、已恢复 1 项、持续未解决 0 项。
@@ -253,14 +253,14 @@
 
 | 阶段 | 状态 | 耗时 | 说明 |
 | --- | --- | ---: | --- |
-| 数据采集 | 成功 | 652ms | file 通道采集 215676 个点 / 150 条时序（648ms） |
-| 标准化清洗 | 成功 | 2419ms | 216000 个有效点 / 150 条时序；缺失率 0.00%，置信度 高 |
-| 结构化存储 | 成功 | 140ms | 数据集 S1 就绪（216000 个指标点） |
-| 动态基线 | 成功 | 1266ms | 计算 150 条基线，动态基线覆盖率 100%（归档 603894 点） |
-| 规则巡检 | 成功 | 114ms | 16 条规则命中 59 项原始发现（114ms） |
+| 数据采集 | 成功 | 623ms | file 通道采集 215676 个点 / 150 条时序（620ms） |
+| 标准化清洗 | 成功 | 2456ms | 216000 个有效点 / 150 条时序；缺失率 0.00%，置信度 高 |
+| 结构化存储 | 成功 | 137ms | 数据集 S1 就绪（216000 个指标点） |
+| 动态基线 | 成功 | 1555ms | 计算 150 条基线，动态基线覆盖率 100%（归档 603894 点） |
+| 规则巡检 | 成功 | 121ms | 16 条规则命中 59 项原始发现（121ms） |
 | 聚合去重 | 成功 | 3ms | 59 条异常（抑制 9 条）聚成 1 个根因簇；多粒度统计 8 个服务 / 5 个集群 |
 | 稳定性评分 | 成功 | 0ms | 规则算分 20.4（E 严重） |
-| AI 智能分析 | 成功 | 8290ms | deepseek/deepseek-chat；1 条根因结论，token 20313，耗时 8284ms |
-| 报告输出 | 成功 | 8ms | Markdown 报告 14552 字符，已写入 run-20260925-100000-S1.md |
+| AI 智能分析 | 成功 | 7200ms | deepseek/deepseek-chat；1 条根因结论，token 19352，耗时 7194ms |
+| 报告输出 | 成功 | 8ms | Markdown 报告 14601 字符，已写入 run-20260925-100000-S1.md |
 
-- AI 分析：deepseek/deepseek-chat；调用 1 次，耗时 8284ms，token 20313，提示词版本 v1
+- AI 分析：deepseek/deepseek-chat；调用 1 次，耗时 7194ms，token 19352，提示词版本 v1

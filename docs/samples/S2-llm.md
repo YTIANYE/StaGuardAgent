@@ -6,7 +6,7 @@
 
 - **巡检窗口**：2026-09-25 09:30~10:00（30分钟），粒度 60s
 - **覆盖范围**：8 个服务 / 15 个实例
-- **执行耗时**：12.7s
+- **执行耗时**：13.0s
 
 ### 稳定性评分
 
@@ -29,17 +29,17 @@
 
 ## 二、风险总结
 
-本次异常以 inventory-svc-1 CPU 打满（96%，持续17分钟）为最显著特征，并沿 inventory-svc → order-svc → gateway 逐级向上传导，导致 order-svc 连接池打满（99%）、gateway P95 延时飙升至 1073ms。全链路无成功率下跌、无错误预算消耗，且证据包中不存在流量同向变化的证据，因此判定为 inventory-svc 侧的资源瓶颈（CPU 打满）而非流量波动或变更引入。规则给出的 E 级（45 分）与真实影响（无可用性损失、仅性能/资源劣化）相比偏重，但仍在合理区间，不做分数调整。
+本次异常以 gateway、order-svc、inventory-svc 三个服务的 CPU、连接池水位与 P95/P99 延时同步飙升为特征，异常自 09:40 起持续约 17~21 分钟，但成功率与业务错误率均在 SLO 内、错误预算未消耗，属于「性能/资源水位告警、尚未演化为可用性事故」。链路自下游向上游逐级劣化：inventory-svc-1 CPU 打满（96%）与连接池高位（95.4%）最先出现，随后 order-svc 连接池打满（99%）、gateway 连接池与 CPU 抬升、延时放大到 1s 以上。证据不足以判定是外部流量抬升还是 inventory-svc 自身能力/配置不足，故按可观测水位事实归为资源瓶颈。
 
 - **趋势判断**：整体平稳
-  - 依据：所有异常指标的 series.trend 均为 stable，first 与 last 值接近基线（如 inventory-svc-1 CPU first=44.5%、last=42.5%，gateway-0 P95 first=64ms、last=61.8ms），说明异常集中在 09:40-09:57 窗口内，窗口末尾已回落至基线水平，当前处于恢复后状态。
-  - 预测：若 inventory-svc-1 的 CPU 热点未被定位并修复，同类单实例打满预计会在下一次库存扣减高峰（如整点促销/批量下单）复现，届时 order-svc 连接池将再次被打满并向上传导至 gateway；当前窗口内无继续恶化迹象，未来 1 小时无 OOM 或可用性跌零的可量化外推依据。
+  - 依据：所有异常序列的 trend 字段均为 stable，且 first/last 采样值已回到基线附近（如 gateway-0 P95 first 64ms / last 61.8ms，inventory-svc-1 CPU first 44.5% / last 42.5%），说明本轮异常在窗口内已自行回落，未继续恶化。
+  - 预测：未来 1 小时若无新增流量或变更，链路应维持在当前基线水平；但 inventory-svc-1 的 CPU 峰值已贴近 96%、连接池 95.4%，若流量再次抬升 20%~30%，预计 5~10 分钟内会重新触发 CPU 打满与 P95 超 1s，并再次通过 order-svc 连接池（当前峰值 99%）向 gateway 传导。
 - **证据不足之处**：
-  - 证据包中没有任何 QPS/流量类指标，无法确认本轮异常是否伴随流量变化；因此不能判定为 traffic_fluctuation，但也不能完全排除外部流量抬升是 inventory-svc CPU 打满的诱因。
-  - inventory-svc 在拓扑中依赖 mysql-order，但证据包中 mysql-order 无任何异常证据，无法区分 inventory-svc-1 CPU 打满是「自身计算能力不足」还是「其外部依赖（mysql-order）变慢导致的等待/重试放大」，故按可观测水位事实归为 resource_bottleneck。
-  - 两条变更（CHG-20260923-0047 距异常 940 分钟、CHG-20260924-0052 距异常 280 分钟）均远早于 30 分钟窗口，不能作为根因；其中 inventory-svc 限流阈值上调是否间接抬高了本次 CPU 负载，证据不足，仅作为背景线索。
-  - 规则 rule_hypothesis 将 inventory-svc 视为偏离最显著的服务，与本次结论一致；但 cluster 的 propagation_path 仅列出 inventory-svc，未体现 order-svc/gateway 的传导关系，实际传播方向依据拓扑与各服务异常时序推断为 inventory-svc → order-svc → gateway。
-  - 历史同类事件中 run-20260925-100000-S1 的根因为 bank-channel 连接池打满，与本轮链路（bank-channel 无异常证据）不同，相似度仅 0.32，不构成复现依据。
+  - 证据包中没有任何流量类指标（QPS、请求量、入口流量），无法判断本轮是外部流量抬升导致资源打满（traffic_fluctuation），还是 inventory-svc 自身处理能力/配置不足（resource_bottleneck）。当前按可观测的水位事实归为 resource_bottleneck。
+  - inventory-svc 在拓扑中依赖 mysql-order，但证据包中 mysql-order 无任何指标，无法区分「inventory-svc 自身 CPU 打满」与「其下游 mysql-order 变慢导致 inventory-svc 线程/连接堆积」。若 mysql-order 实际劣化，类别应改为 dependency_failure。
+  - 两条变更（CHG-20260923-0047 距异常 940 分钟、CHG-20260924-0052 距异常 280 分钟）均远早于 30 分钟窗口，按规则不能作为根因，仅作为背景信息；其中 inventory-svc 限流阈值 800->1200 QPS 的上调可能抬高了实际承载压力，但无法从现有证据确认其与本轮异常的时间因果。
+  - 规则 rule_hypothesis 认为 inventory-svc 偏离最显著，本结论与其一致；但 propagation_path 仅列出 inventory-svc，未体现 order-svc、gateway 的传导关系，实际影响面覆盖 3 个服务 7 个实例。
+  - 所有异常序列 trend 均为 stable 且首尾值已回落，异常窗口内已自愈，无法确认是否会在下一个流量高峰复现。
 
 ## 三、异常清单
 
@@ -123,26 +123,26 @@
 - **信号规模**：32 条异常，涉及 3 个服务（gateway、inventory-svc、order-svc）
 - **传播路径**：`inventory-svc`　（数据流方向，故障影响由此向上游扩散）
 - **规则假设**：3 个服务出现关联异常，疑似同一根因传导，inventory-svc 的偏离最显著
-- **AI 根因**：**资源瓶颈** — inventory-svc-1 CPU 使用率升至 96% 并持续 17 分钟接近打满，处理能力下降导致其自身 P95/P99 延时飙升至 1407ms/2068ms，并沿 order-svc → gateway 逐级向上传导，引发 order-svc 连接池打满（99%）与 gateway P95 延时 1073ms。（置信度 72%）
+- **AI 根因**：**资源瓶颈** — inventory-svc-1 的 CPU 使用率在 17 分钟内持续贴近 96% 打满、连接池使用率升至 95.4%，处理能力被自身资源水位耗尽，导致其 P95/P99 延时放大到 1.4s/2.07s，并沿调用链向上游 order-svc、gateway 传导。（置信度 62%）
 - **AI 认定的根因服务**：`inventory-svc`
-- **影响面**：inventory-svc 单实例（inventory-svc-1）CPU 打满，P95 延时由 84ms 升至 1407ms（+1589%），P99 峰值 2068ms；order-svc 三实例连接池使用率均达 99%、P95 延时升至 1371ms；gateway 三实例 P95 延时升至 1073~1080ms、P99 升至 1105~1123ms。全链路成功率与业务错误率仍在 SLO 内，未产生可用性损失，但用户侧下单链路端到端延时劣化约 17~21 分钟。
-- **建议责任方**：供应链组（inventory-svc），交易平台组（order-svc/gateway）配合
+- **影响面**：gateway 三个实例 P95 延时由约 60ms 升至 1073~1080ms（21 分钟）、P99 升至 1105~1123ms；order-svc 三个实例 P95 由约 95ms 升至 1370~1380ms、连接池使用率打满至 99%；inventory-svc-1 P95 1407ms、P99 峰值 2068ms。全链路 7 个实例（占 47%）出现性能/资源异常，但成功率与业务错误率仍在 SLO 内，尚未产生用户可见失败。
+- **建议责任方**：供应链组（inventory-svc 主责），交易平台组配合（order-svc/gateway 侧保护）
 
-<details><summary>证据引用（14 条）</summary>
+<details><summary>证据引用（19 条）</summary>
 
 - `RES-01:inventory-svc/inventory-svc-1/cpu_usage`
+- `RES-04:inventory-svc/inventory-svc-1/conn_usage`
 - `PERF-02:inventory-svc/inventory-svc-1/latency_p95`
 - `PERF-01:inventory-svc/inventory-svc-1/latency_p99`
-- `RES-04:inventory-svc/inventory-svc-1/conn_usage`
+- `PERF-03:inventory-svc/inventory-svc-1/latency_p99`
 - `RES-04:order-svc/order-svc-0/conn_usage`
 - `RES-04:order-svc/order-svc-1/conn_usage`
 - `RES-04:order-svc/order-svc-2/conn_usage`
 - `PERF-02:order-svc/order-svc-0/latency_p95`
+- `PERF-02:order-svc/order-svc-1/latency_p95`
+- `PERF-02:order-svc/order-svc-2/latency_p95`
 - `PERF-02:gateway/gateway-0/latency_p95`
-- `PERF-02:gateway/gateway-1/latency_p95`
-- `PERF-02:gateway/gateway-2/latency_p95`
-- `RES-01:order-svc/order-svc-0/cpu_usage`
-- …其余 2 条同类证据（见 JSON 报告）
+- …其余 7 条同类证据（见 JSON 报告）
 
 </details>
 
@@ -151,24 +151,26 @@
 ### 立即止血（本次窗口内）
 
 - **CLUS-01 · 资源瓶颈**
-  - 立即对 inventory-svc-1 做 CPU 热点排查：抓取该实例 09:40-09:57 的火焰图/pprof，确认是库存扣减逻辑、序列化还是 GC 导致 CPU 打满，必要时先摘除该实例或临时扩容。
+  - 立即对 inventory-svc 扩容或临时提升实例规格：将 inventory-svc-1 所在副本数从当前水平增加 1~2 个副本，观察 CPU 是否回落至 70% 以下、P95 是否回到 200ms 内。
 
 ### 短期加固（本周内）
 
-- [CLUS-01] 短期：为 inventory-svc 增加 CPU 使用率 >85% 持续 3 分钟的自动扩容/限流联动策略，避免单实例打满后把压力透传到 order-svc 连接池。
-- [CLUS-01] 短期：核查 order-svc 连接池上限与超时配置，确认 99% 打满是下游变慢导致的被动堆积，还是池上限本身偏小；若为前者，需为 order-svc 对 inventory-svc 的调用增加熔断/快速失败，防止连接被慢请求占满。
-- [CLUS-01] 短期：复核 CHG-20260923-0047（inventory-svc 限流阈值 800→1200 QPS）是否使 inventory-svc 承接了超出其单实例处理能力的请求量，评估是否需要回退或同步扩容。
+- [CLUS-01] 立即核查 inventory-svc 到 mysql-order 的慢查询与连接池配置：抓取异常时段 SQL 执行计划，确认是否存在全表扫描或锁等待；若连接池上限偏小，按峰值 QPS 重新核算并上调。
+- [CLUS-01] 短期为 order-svc 连接池设置排队/超时保护（如获取连接超时 200ms、快速失败），避免下游变慢时连接池被占满形成级联阻塞。
+- [CLUS-01] 短期在 gateway 对 order-svc/inventory-svc 调用链增加超时与熔断阈值（如 P99 超 800ms 触发半开），防止慢调用向上游堆积。
+- [CLUS-01] 复盘 inventory-svc 限流阈值由 800 QPS 上调至 1200 QPS 的容量评估是否与当前实例规格匹配，必要时回退或同步扩容。
 
 ### 长期治理
 
-- 为 inventory-svc 建立单实例 CPU 水位与 P95 延时的联合告警，阈值设为 CPU>85% 且 P95>500ms 持续 2 分钟，提前于连接池打满触发。
-- 在 order-svc → inventory-svc 调用链路上配置舱壁隔离（独立线程池/信号量）与超时熔断，避免 inventory-svc 变慢直接耗尽 order-svc 连接池。
-- 对 inventory-svc 做容量压测，明确单实例在目标 QPS 下的 CPU 拐点，并据此校准限流阈值（当前 1200 QPS 是否超出单实例能力需验证）。
-- 将 gateway/order-svc/inventory-svc 的 P95/P99 延时与下游资源水位纳入同一看板，建立「下游资源打满 → 上游延时抬升」的关联告警，缩短此类传导型故障的定位时间。
+- 为 inventory-svc 建立基于 CPU 与连接池水位的 HPA 策略（如 CPU>75% 持续 3 分钟即扩容），避免单实例长时间贴近 96%。
+- 对 order-svc、gateway 的连接池使用率设置分级告警（80% 预警、90% 严重）并配套自动扩容或限流降级预案。
+- 梳理 gateway -> order-svc -> inventory-svc -> mysql-order 全链路的超时预算，确保下游超时时间严格小于上游，避免慢调用逐级放大。
+- 将 inventory-svc 限流阈值、连接池上限、实例规格纳入容量基线评审，任何阈值上调必须附带压测数据。
+- 补充 inventory-svc 对 mysql-order 的依赖指标（慢查询数、锁等待、连接数）采集，当前证据包中该下游完全不可观测，是根因判定的最大盲区。
 
 ## 七、稳定性趋势
 
-**对比对象**：`run-20260925-100000-S1`（2026-09-26T17:36+08:00）
+**对比对象**：`run-20260925-100000-S1`（2026-09-27T01:55+08:00）
 
 - 评分变化：**+24.6 分**（较上次上升）
 - 稳定性评分较上次上升 24.6 分；新增异常 6 项、已恢复 29 项、持续未解决 30 项；持续未解决的项需要确认是否有人在跟进。
@@ -250,14 +252,14 @@
 
 | 阶段 | 状态 | 耗时 | 说明 |
 | --- | --- | ---: | --- |
-| 数据采集 | 成功 | 706ms | file 通道采集 215677 个点 / 150 条时序（702ms） |
-| 标准化清洗 | 成功 | 2650ms | 216000 个有效点 / 150 条时序；缺失率 0.00%，置信度 高 |
-| 结构化存储 | 成功 | 144ms | 数据集 S2 就绪（216000 个指标点） |
-| 动态基线 | 成功 | 1017ms | 计算 150 条基线，动态基线覆盖率 100%（归档 603894 点） |
-| 规则巡检 | 成功 | 116ms | 16 条规则命中 36 项原始发现（116ms） |
+| 数据采集 | 成功 | 587ms | file 通道采集 215677 个点 / 150 条时序（583ms） |
+| 标准化清洗 | 成功 | 2587ms | 216000 个有效点 / 150 条时序；缺失率 0.00%，置信度 高 |
+| 结构化存储 | 成功 | 139ms | 数据集 S2 就绪（216000 个指标点） |
+| 动态基线 | 成功 | 1240ms | 计算 150 条基线，动态基线覆盖率 100%（归档 603894 点） |
+| 规则巡检 | 成功 | 118ms | 16 条规则命中 36 项原始发现（118ms） |
 | 聚合去重 | 成功 | 3ms | 36 条异常（抑制 4 条）聚成 1 个根因簇；多粒度统计 8 个服务 / 5 个集群 |
 | 稳定性评分 | 成功 | 0ms | 规则算分 45.0（E 严重）；紧急（P1）异常命中核心链路服务，故障会直接放大到用户侧，封顶 45 |
-| AI 智能分析 | 成功 | 8064ms | deepseek/deepseek-chat；1 条根因结论，token 16909，耗时 8057ms |
-| 报告输出 | 成功 | 12ms | Markdown 报告 12653 字符，已写入 run-20260925-100000-S2.md |
+| AI 智能分析 | 成功 | 8325ms | deepseek/deepseek-chat；1 条根因结论，token 16458，耗时 8321ms |
+| 报告输出 | 成功 | 6ms | Markdown 报告 12706 字符，已写入 run-20260925-100000-S2.md |
 
-- AI 分析：deepseek/deepseek-chat；调用 1 次，耗时 8057ms，token 16909，提示词版本 v1
+- AI 分析：deepseek/deepseek-chat；调用 1 次，耗时 8321ms，token 16458，提示词版本 v1
