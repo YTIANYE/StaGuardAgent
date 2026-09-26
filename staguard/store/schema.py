@@ -57,6 +57,8 @@ runs = Table(
     metadata,
     Column("run_id", String(96), primary_key=True),
     Column("scenario_id", String(32)),
+    # 本次读的数据切片，用于报告里说明「这份结论看的是哪份数据」。
+    Column("dataset_id", String(64)),
     Column("window_start", String(32), nullable=False),
     Column("window_end", String(32), nullable=False),
     Column("granularity_seconds", Integer, nullable=False),

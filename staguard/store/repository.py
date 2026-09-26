@@ -282,6 +282,7 @@ class Repository:
         return InspectionRun(
             run_id=row["run_id"],
             scenario_id=row["scenario_id"],
+            dataset_id=row["dataset_id"],
             window=window,
             granularity_seconds=int(row["granularity_seconds"]),
             started_at=datetime.fromisoformat(row["started_at"]),

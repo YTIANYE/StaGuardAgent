@@ -38,6 +38,7 @@ class EvalContext:
         detect_dataset: str,
         archive_dataset: str,
         scenario_id: str | None = None,
+        source_dataset: str | None = None,
     ) -> None:
         self.settings = settings
         self.repo = repo
@@ -45,6 +46,9 @@ class EvalContext:
         self.detect_dataset = detect_dataset
         self.archive_dataset = archive_dataset
         self.scenario_id = scenario_id
+        self.source_dataset = source_dataset or scenario_id or settings.app.live_dataset
+        """本次读的数据切片。与 `scenario_id` 不同：不带场景的巡检也有切片（即 live_dataset），
+        复发识别需要靠它把「同一份数据被巡检两次」排除掉。"""
         self.topology: Topology = settings.topology
         self._series_cache: dict[tuple[str, str, MetricName, str], MetricSeries] = {}
         self._service_cache: dict[tuple[str, MetricName, str], dict[str, MetricSeries]] = {}
@@ -157,5 +161,8 @@ def build_context(
     detect_dataset: str,
     archive_dataset: str,
     scenario_id: str | None = None,
+    source_dataset: str | None = None,
 ) -> EvalContext:
-    return EvalContext(settings, repo, window, detect_dataset, archive_dataset, scenario_id)
+    return EvalContext(
+        settings, repo, window, detect_dataset, archive_dataset, scenario_id, source_dataset
+    )

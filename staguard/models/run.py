@@ -138,6 +138,13 @@ class InspectionRun(BaseModel):
 
     run_id: str
     scenario_id: str | None = None
+    dataset_id: str | None = None
+    """本次读的是哪份数据切片（场景巡检即场景编号，不带场景的巡检即 `live_dataset`）。
+
+    它和 `scenario_id` 是两件事：场景是「回放哪一个故障剧本」，切片是「实际看了哪份数据」。
+    不带场景的巡检两者必然不同，报告里会把切片写出来——
+    「当前水位巡检正常」这句话，读者有权知道看的是哪份数据。
+    """
     window: TimeWindow
     granularity_seconds: int = 60
     started_at: datetime
@@ -188,6 +195,7 @@ class InspectionRun(BaseModel):
         return {
             "run_id": self.run_id,
             "scenario_id": self.scenario_id,
+            "dataset_id": self.dataset_id,
             "window_start": self.window.start.isoformat(),
             "window_end": self.window.end.isoformat(),
             "granularity_seconds": self.granularity_seconds,

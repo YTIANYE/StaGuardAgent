@@ -105,7 +105,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------------ 巡检
     @app.post("/api/v1/inspections", summary="触发一次巡检")
     def create_inspection(
-        scenario_id: str | None = Query(default=None, description="场景编号，如 S1；为空则巡检当前状态"),
+        scenario_id: str | None = Query(
+            default=None,
+            description="场景编号，如 S1（回放该历史故障切片）；为空则巡检当前水位",
+        ),
         source: str | None = Query(default=None, description="数据源：file / http"),
         window_end: str | None = Query(default=None, description="巡检窗口结束时刻（ISO）"),
     ) -> dict[str, Any]:

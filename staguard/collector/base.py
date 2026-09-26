@@ -28,6 +28,16 @@ class CollectRequest(BaseModel):
     """
 
     dataset_id: str
+    """数据切片 ID。
+
+    它是「回放哪一份切片」的标识，不是「实时数据源」的必需参数：
+    - 本地文件源 / 模拟监控接口按它定位切片（`data/metrics/<id>.json`）；
+    - 真实监控数据源（Prometheus 等）可以**忽略它**，直接按下面的时间范围查实时数据。
+
+    两种用法共用同一个入口，是刻意的：编排层只认「窗口 + 观察期」，
+    「当前水位」还是「历史切片」由数据源自己解释。
+    """
+
     window_end: datetime
     window_minutes: int = 30
     history_minutes: int = 180

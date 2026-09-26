@@ -43,10 +43,14 @@ def render(report: InspectionReport) -> str:
 # --------------------------------------------------------------------------- 概览
 def _header(report: InspectionReport) -> list[str]:
     run = report.run
+    scope = f"场景 `{run.scenario_id or 'default'}`"
+    if run.scenario_id is None and run.dataset_id:
+        # 「当前水位巡检正常」这句话，读者有权知道看的是哪份数据。
+        scope += f"（数据切片 `{run.dataset_id}`）"
     return [
         "# 业务稳定性巡检报告",
         "",
-        f"> 巡检编号 `{run.run_id}`　|　场景 `{run.scenario_id or 'default'}`　|　"
+        f"> 巡检编号 `{run.run_id}`　|　{scope}　|　"
         f"数据源 `{run.source}`　|　状态 `{run.status.label}`",
         "",
     ]
@@ -88,7 +92,11 @@ def _overview(report: InspectionReport) -> list[str]:
     if score.capped_by:
         lines.append(f"> **封顶生效**：{score.capped_by}")
         lines.append("")
-    if score.ai_adjust:
+    if report.run.error:
+        # 没数据就不谈评分来源——「AI 降级」这种说法会把读者引向错误的方向。
+        lines.append(f"> **本次巡检无法评估**：{report.run.error}")
+        lines.append("")
+    elif score.ai_adjust:
         lines.append(
             f"> 规则算分 {score.rule_score:.1f}，AI 微调 {score.ai_adjust:+d} 分，最终 {score.total:.1f} 分。"
         )
@@ -129,7 +137,11 @@ def _anomalies(report: InspectionReport) -> list[str]:
     lines = ["## 三、异常清单", ""]
     active = [a for a in report.anomalies if not a.is_suppressed]
     if not active:
-        lines.extend(["本次巡检未发现越线异常。", ""])
+        # 没有异常有两种成因，措辞必须区分：真的都正常，还是一点数据都没取到。
+        if report.run.error:
+            lines.extend([f"> **本次未取得有效数据，无法评估**：{report.run.error}", ""])
+        else:
+            lines.extend(["本次巡检未发现越线异常。", ""])
         return lines
 
     lines.append(

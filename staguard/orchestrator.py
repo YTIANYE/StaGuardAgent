@@ -142,13 +142,21 @@ class InspectionOrchestrator:
             start=anchor - timedelta(minutes=settings.window_minutes),
             end=anchor,
         )
-        run_id = run_id or run_id_for(anchor, scenario_id)
         source = self.source or build_source(settings, source_name)
+        # 两个数据集，职责不同，不能合并成一个变量：
+        #   source_dataset —— 从哪取数。带场景时回放该场景的切片；不带场景时问的是
+        #       「现在什么水位」，由数据源解释（模拟环境读 live_dataset 指定的切片，
+        #       真实环境按 window 查实时数据）；
+        #   detect_dataset —— 标准化后的点入库到哪、规则再从哪读。不带场景时用 run_id，
+        #       保证每次临时巡检互不污染：若两者合并，定时巡检会反复写同一个数据集，
+        #       下一轮读到上一轮的残留，而且失效方式是静默的。
+        source_dataset = scenario_id or settings.app.live_dataset
         detect_dataset = scenario_id or run_id
 
         run = InspectionRun(
             run_id=run_id,
             scenario_id=scenario_id,
+            dataset_id=source_dataset,
             window=window,
             granularity_seconds=settings.granularity_seconds,
             started_at=now(),
@@ -173,7 +181,7 @@ class InspectionOrchestrator:
         # ---------------------------------------------------------- 1. 采集
         with tracker.stage("collect") as stage:
             request = CollectRequest(
-                dataset_id=detect_dataset,
+                dataset_id=source_dataset,
                 window_end=anchor,
                 window_minutes=settings.window_minutes,
                 history_minutes=self._history_minutes(scenario_id),
@@ -208,12 +216,21 @@ class InspectionOrchestrator:
             with tracker.stage("store") as stage:
                 inserted = self._persist_points(detect_dataset, normalized.points, stage)
                 self._sync_changes(anchor, collected)
+                if inserted:
+                    # 整个数据集被重写过之后，行数与数据分布都变了，
+                    # 不刷新统计信息的话基线查询会被选成全表扫描（见 Database.optimize）。
+                    self.repo.db.optimize()
                 stage.detail = f"数据集 {detect_dataset} 就绪（{inserted} 个指标点）"
 
         self.repo.save_run(run)
 
         if collected is None or normalized is None or not normalized.points:
-            return self._finish_without_data(run, tracker, "采集或清洗阶段未获得有效数据")
+            # 数据源的 warning 里带着可执行的线索（例如「可用数据集：S0、S1…」），
+            # 用一句通用的「未获得有效数据」把它盖掉，等于让读者自己回去翻日志。
+            reason = "；".join(collected.warnings) if collected and collected.warnings else ""
+            return self._finish_without_data(
+                run, tracker, reason or "采集或清洗阶段未获得有效数据"
+            )
 
         # ---------------------------------------------------------- 4~6. 基线 / 规则 / 聚合
         with tracker.stage("baseline") as stage:
@@ -222,6 +239,7 @@ class InspectionOrchestrator:
                 detect_dataset=detect_dataset,
                 archive_dataset=ARCHIVE_DATASET,
                 scenario_id=scenario_id,
+                source_dataset=source_dataset,
             )
             baselines = context.provider.collect(
                 context.instances(), list(MetricName)
@@ -444,18 +462,35 @@ class InspectionOrchestrator:
     def _finish_without_data(
         self, run: InspectionRun, tracker: StageTracker, reason: str
     ) -> InspectionReport:
+        """拿不到有效数据时的收尾。
+
+        仍然**写报告、仍然落库**：失败也是一种巡检结论，而且是最需要留痕的一种。
+        早先这里直接 return，磁盘上没有痕迹、报告接口也取不到，
+        只剩终端上一句「未发现越线异常」——把「没数据」伪装成了「一切正常」。
+        """
         logger.error("巡检 %s 未能获得有效数据：%s", run.run_id, reason)
         run.status = RunStatus.FAILED
         run.error = reason
         run.finished_at = now()
-        self.repo.save_run(run)
         score = ScoreResult(
             rule_score=0.0, ai_adjust=0, total=0.0, grade="无法评估",
             breakdown=[], capped_by=None,
         )
-        return InspectionReport(run=run, score=score, ai=None, ai_meta=AIMeta(
-            provider="none", model="none", degraded=True, degraded_reason=reason,
-        ))
+        report = InspectionReport(
+            run=run, score=score, ai=None,
+            ai_meta=AIMeta(
+                provider="none", model="none", degraded=True, degraded_reason=reason,
+            ),
+        )
+        self.repo.save_run(run)
+        markdown = render_markdown(report)
+        try:
+            path = self._write_report(run, markdown)
+            logger.warning("巡检 %s 的「无法评估」报告已写入 %s", run.run_id, path)
+        except OSError:
+            logger.warning("「无法评估」报告写盘失败", exc_info=True)
+        self.repo.save_report(run.run_id, score.total, "", markdown, report.model_dump(mode="json"))
+        return report
 
 
 def _fingerprint(points: list) -> tuple[int, int, int]:

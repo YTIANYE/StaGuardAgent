@@ -156,7 +156,18 @@ def _cluster_stats_table(report: InspectionReport) -> None:
 def _anomaly_table(report: InspectionReport) -> None:
     active = [a for a in report.anomalies if not a.is_suppressed]
     if not active:
-        console.print(Panel("未发现越线异常，各指标处于历史同时段正常区间。", border_style="green"))
+        # 「一条数据都没拿到」和「拿到了、但都正常」是两件完全相反的事，
+        # 不能共用同一句话——前者说成「各指标正常」，等于用一句绿色文案掩盖一次失败。
+        if report.run.error:
+            console.print(
+                Panel(
+                    f"本次未取得有效数据，无法评估：{report.run.error}",
+                    title="无法评估",
+                    border_style="red",
+                )
+            )
+        else:
+            console.print(Panel("未发现越线异常，各指标处于历史同时段正常区间。", border_style="green"))
         return
 
     table = Table(

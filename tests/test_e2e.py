@@ -146,7 +146,10 @@ def test_report_contains_required_sections(settings: Settings, prepared: Reposit
     from staguard.report import render_markdown
 
     markdown = render_markdown(report)
-    for section in ("巡检概览", "风险总结", "异常清单", "根因分析", "修复建议", "稳定性趋势", "附录"):
+    for section in (
+        "巡检概览", "风险总结", "异常清单", "多粒度巡检统计",
+        "根因分析", "修复建议", "稳定性趋势", "附录",
+    ):
         assert section in markdown, f"报告缺少章节：{section}"
     assert not re.search(r"\{[a-z_]+\}", markdown), "报告里出现了未渲染的模板占位符"
     assert str(report.score.total) in markdown

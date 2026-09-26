@@ -51,6 +51,18 @@ class AppConfig(BaseSettings):
 
     # ---- 数据源 ----
     default_source: Literal["file", "http"] = "file"
+    live_dataset: str = "S0"
+    """不带场景巡检时，从哪个数据切片取「当前水位」。
+
+    `scenario_id` 的职责是**回放历史故障切片**；不带场景的巡检（定时巡检、接口手动触发、
+    `staguard run`）问的是「现在什么水位」，这件事得由数据源回答，而不是靠一个假的
+    dataset_id。
+
+    模拟环境下没有一个真的持续写入的数据源，所以用一个固定切片代表当前水位——
+    默认取正常态（S0），这样「巡检当前水位」的结论是「不发误报」，与真实生产里的
+    期望一致。真实环境接入实时数据源后，数据源按 window 查实时数据，本项不生效
+    （见 `CollectRequest.dataset_id` 的说明）。
+    """
     mock_api_base_url: str = "http://127.0.0.1:8090"
     mock_api_timeout_s: float = 10.0
     http_source_trust_env: bool = False
