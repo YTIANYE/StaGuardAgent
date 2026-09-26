@@ -11,6 +11,7 @@ from .anomaly import Anomaly, AnomalyCluster
 from .baseline import BaselineSet
 from .metric import DataQualityReport
 from .run import ChangeEvent, InspectionRun
+from .statistics import ClusterStat, ServiceStat
 
 
 class ScoreBreakdownItem(BaseModel):
@@ -97,6 +98,10 @@ class InspectionReport(BaseModel):
     history: list[ScoreSnapshot] = Field(default_factory=list)
     rule_stats: dict[str, int] = Field(default_factory=dict)
     """规则命中统计 {rule_id: 命中次数}。"""
+    service_stats: list[ServiceStat] = Field(default_factory=list)
+    """服务维度统计：每个服务一行，含无异常的服务。"""
+    cluster_stats: list[ClusterStat] = Field(default_factory=list)
+    """集群维度统计：每个集群一行，由服务维度聚合而来。"""
 
     @property
     def top_anomalies(self) -> list[Anomaly]:

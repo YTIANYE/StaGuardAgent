@@ -1,9 +1,10 @@
 # 服务清单与依赖拓扑
 # ---------------------------------------------------------------
-# 这份文件同时承担三件事：
+# 这份文件同时承担四件事：
 #   1. 定义巡检范围（哪些服务、哪些实例）；
 #   2. 定义依赖拓扑，用于「业务链路异常」判定与「根因簇传播聚类」；
-#   3. 定义服务关键度与 SLO，参与异常分级与稳定性评分。
+#   3. 定义服务关键度与 SLO，参与异常分级与稳定性评分；
+#   4. 定义集群分组，用于报告里的「集群维度」巡检统计。
 #
 # criticality 越高，同一幅度异常定级越重；命中核心链路（gateway / order-svc / payment-svc）
 # 的 P1 会触发更严格的评分封顶（见 scoring.yaml）。
@@ -14,8 +15,19 @@ default_slo:
   latency_p95_ms: 300
   business_error_rate: 1.0  # %
 
+# 集群分组：服务按业务域归组，「集群维度统计」按这个口径聚合。
+# 服务的 `cluster` 必须出现在下表里——拼错一个字母会在启动时直接报错，
+# 否则一个服务会被静默分到错误的集群，而报告上看起来毫无异常。
+clusters:
+  trade: 交易集群
+  payment: 支付集群
+  supply: 供应链集群
+  user: 用户集群
+  external: 外部依赖集群
+
 services:
   gateway:
+    cluster: trade
     tier: entry
     criticality: 1.0
     owner: 交易平台组
@@ -27,6 +39,7 @@ services:
       latency_p95_ms: 200
 
   order-svc:
+    cluster: trade
     tier: core
     criticality: 1.0
     owner: 交易平台组
@@ -35,6 +48,7 @@ services:
     depends_on: [payment-svc, inventory-svc]
 
   payment-svc:
+    cluster: payment
     tier: core
     criticality: 1.0
     owner: 支付组
@@ -45,6 +59,7 @@ services:
       latency_p99_ms: 1200
 
   inventory-svc:
+    cluster: supply
     tier: core
     criticality: 0.8
     owner: 供应链组
@@ -53,6 +68,7 @@ services:
     depends_on: [mysql-order]
 
   user-svc:
+    cluster: user
     tier: general
     criticality: 0.6
     owner: 用户中心
@@ -62,6 +78,7 @@ services:
 
   # ---- 外部依赖：不产生产能指标，但是根因的高发地带 ----
   bank-channel:
+    cluster: external
     tier: external
     external: true
     criticality: 1.0
@@ -70,6 +87,7 @@ services:
     instances: [bank-channel-0]
 
   mysql-order:
+    cluster: external
     tier: external
     external: true
     criticality: 0.8
@@ -78,6 +96,7 @@ services:
     instances: [mysql-order-0]
 
   redis-session:
+    cluster: external
     tier: external
     external: true
     criticality: 0.6

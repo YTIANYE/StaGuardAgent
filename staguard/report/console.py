@@ -4,6 +4,9 @@
 终端一次能看的行数有限，所以优先回答「最要紧的是什么」——
 先给评分和等级分布，再给 Top 异常，最后给一句话结论。
 细节留在 Markdown 报告里，不往终端堆。
+
+多粒度统计上遵循同一条取舍：终端只给**集群维度**（最多 5 行），不给服务维度——
+服务级明细在异常清单里已经能看到服务/实例列，再铺一张全服务表只会把 P1 挤下去。
 """
 
 from __future__ import annotations
@@ -45,6 +48,7 @@ def render(report: InspectionReport, verbose: bool = False) -> None:
     console.print(_header(report))
     console.print(_score_panel(report))
     console.print(_level_table(report))
+    _cluster_stats_table(report)
     _anomaly_table(report)
     _cluster_hints(report)
     _trend_panel(report)
@@ -105,6 +109,48 @@ def _level_table(report: InspectionReport) -> Table:
         ]
     )
     return table
+
+
+CLUSTER_ROWS = 5
+
+
+def _cluster_stats_table(report: InspectionReport) -> None:
+    """集群维度统计。只列有异常的集群，最多 5 行。"""
+    if not report.cluster_stats:
+        return
+    affected = [c for c in report.cluster_stats if not c.is_healthy]
+    if not affected:
+        return
+
+    table = Table(
+        title=f"集群维度（{len(report.cluster_stats)} 个集群 / {len(affected)} 个有异常）",
+        header_style="bold",
+        expand=False,
+    )
+    table.add_column("集群", width=14)
+    table.add_column("服务", justify="right", width=5)
+    table.add_column("异常服务", justify="right", width=8)
+    table.add_column("异常数", justify="right", width=7)
+    table.add_column("最严重", width=6)
+    table.add_column("受影响实例", justify="right", width=11)
+    table.add_column("影响面", justify="right", width=7)
+    table.add_column("根因簇", justify="right", width=7)
+
+    for cluster in affected[:CLUSTER_ROWS]:
+        ratio = cluster.affected_ratio
+        table.add_row(
+            cluster.label,
+            str(cluster.service_count),
+            str(cluster.affected_service_count),
+            str(cluster.anomaly_count),
+            Text(cluster.max_level.code, style=LEVEL_STYLE[cluster.max_level])
+            if cluster.max_level
+            else "—",
+            f"{cluster.affected_instances} / {cluster.total_instances}",
+            "—" if ratio is None else f"{ratio:.0%}",
+            str(cluster.root_cause_count),
+        )
+    console.print(table)
 
 
 def _anomaly_table(report: InspectionReport) -> None:

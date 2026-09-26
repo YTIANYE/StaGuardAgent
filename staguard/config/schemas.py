@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from ..models import Dimension, Severity, Topology
+from ..models import DEFAULT_CLUSTER, DEFAULT_CLUSTER_LABEL, Dimension, Severity, Topology
 from ..models.topology import ServiceNode
 
 
@@ -42,12 +42,32 @@ class ServiceSpec(BaseModel):
     instances: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
     external: bool = False
+    cluster: str | None = None
+    """所属集群键，用于「集群维度」统计。必须出现在顶层的 `clusters` 里。"""
     slo: SLOSpec | None = None
 
 
 class ServicesConfig(BaseModel):
     default_slo: SLOSpec = Field(default_factory=SLOSpec)
+    clusters: dict[str, str] = Field(default_factory=dict)
+    """集群键 -> 展示名（例如 `trade: 交易集群`）。空则全部服务归入「未分组」。"""
     services: dict[str, ServiceSpec] = Field(default_factory=dict)
+
+    def cluster_of(self, service: str) -> str:
+        spec = self.services.get(service)
+        return spec.cluster if spec and spec.cluster else DEFAULT_CLUSTER
+
+    def undefined_clusters(self) -> list[tuple[str, str]]:
+        """返回 (服务名, 未定义的集群键)，供启动期强校验使用。
+
+        拼错一个字母就会把一个服务静默分到错误的集群里，而报告上看起来毫无异常——
+        这类错误必须在启动时暴露，不能等读者去比对配置。
+        """
+        return [
+            (name, spec.cluster)
+            for name, spec in self.services.items()
+            if spec.cluster and spec.cluster not in self.clusters
+        ]
 
     def to_topology(self) -> Topology:
         nodes: dict[str, ServiceNode] = {}
@@ -61,8 +81,11 @@ class ServicesConfig(BaseModel):
                 depends_on=list(spec.depends_on),
                 owner=spec.owner,
                 description=spec.description,
+                cluster=self.cluster_of(name),
             )
-        return Topology(services=nodes)
+        labels = dict(self.clusters)
+        labels.setdefault(DEFAULT_CLUSTER, DEFAULT_CLUSTER_LABEL)
+        return Topology(services=nodes, cluster_labels=labels)
 
     def slo_for(self, service: str) -> SLOSpec:
         spec = self.services.get(service)

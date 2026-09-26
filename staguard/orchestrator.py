@@ -30,7 +30,7 @@ from .collector import CollectionResult, CollectRequest, MetricSource, build_sou
 from .config import Settings, build_settings
 from .dataset import build_change_events
 from .dataset.generator import ARCHIVE_DATASET, required_history_minutes
-from .detect import aggregate, build_clusters
+from .detect import aggregate, build_clusters, build_granularity_stats
 from .models import (
     AIAnalysis,
     AIMeta,
@@ -228,11 +228,15 @@ class InspectionOrchestrator:
             result = aggregate(findings, settings.topology)
             anomalies = result.anomalies
             clusters = build_clusters(anomalies, settings.topology, window)
+            service_stats, cluster_stats = build_granularity_stats(
+                settings.topology, anomalies, clusters
+            )
             run.anomaly_count = len(result.active)
             run.count_levels([a.level for a in result.active])
             stage.detail = (
                 f"{len(anomalies)} 条异常（抑制 {len(result.suppressed)} 条）"
                 f"聚成 {len(clusters)} 个根因簇"
+                f"；多粒度统计 {len(service_stats)} 个服务 / {len(cluster_stats)} 个集群"
             )
             self.repo.save_anomalies(run_id, anomalies)
             self.repo.save_baselines(run_id, baselines)
@@ -286,6 +290,7 @@ class InspectionOrchestrator:
             ai=analysis, ai_meta=meta, data_quality=normalized.quality,
             baselines=baselines, changes=context.changes(), comparison=comparison,
             history=history, rule_stats=self.engine.stats(findings),
+            service_stats=service_stats, cluster_stats=cluster_stats,
         )
 
         with tracker.stage("report") as stage:

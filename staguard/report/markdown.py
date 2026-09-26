@@ -1,17 +1,18 @@
 """Markdown 巡检报告渲染。
 
-报告结构刻意固定为七章——固定的结构意味着阅读者知道去哪里找什么，
+报告结构刻意固定为八章——固定的结构意味着阅读者知道去哪里找什么，
 这也正是「标准化报告」相对自由文本的核心价值：
 
-    1. 巡检概览      覆盖范围、评分卡、结论一句话
+    1. 巡检概览      覆盖范围、评分卡（含评分来源口径）、结论一句话
     2. 风险总结      AI 的总结（或规则归因的总结）
     3. 异常清单      按等级排序，含实测 vs 基线、起始时刻、级别理由
-    4. 根因分析      按根因簇，含传播路径、证据引用、与规则假设的一致性
-    5. 修复建议      分「立即止血 / 短期 / 长期治理」三档，带责任方
-    6. 稳定性趋势    与上次的对比、评分历史
-    7. 附录          数据质量、规则命中统计、阶段耗时、AI 调用元信息
+    4. 多粒度统计    服务维度 / 集群维度的巡检统计
+    5. 根因分析      按根因簇，含传播路径、证据引用、与规则假设的一致性
+    6. 修复建议      分「立即止血 / 短期 / 长期治理」三档，带责任方
+    7. 稳定性趋势    与上次的对比、评分历史
+    8. 附录          数据质量、规则命中统计、阶段耗时、AI 调用元信息
 
-第 4 章会同时展示「规则假设」和「AI 结论」，两者不一致时会显式标注
+第 5 章会同时展示「规则假设」和「AI 结论」，两者不一致时会显式标注
 `⚠️ 与规则假设不一致`——这种分歧恰恰是最需要人工看一眼的地方，
 把它藏起来等于丢掉了一次发现问题的机会。
 """
@@ -31,6 +32,7 @@ def render(report: InspectionReport) -> str:
     lines.extend(_overview(report))
     lines.extend(_summary(report))
     lines.extend(_anomalies(report))
+    lines.extend(_granularity(report))
     lines.extend(_clusters(report))
     lines.extend(_suggestions(report))
     lines.extend(_trend(report))
@@ -90,6 +92,13 @@ def _overview(report: InspectionReport) -> list[str]:
         lines.append(
             f"> 规则算分 {score.rule_score:.1f}，AI 微调 {score.ai_adjust:+d} 分，最终 {score.total:.1f} 分。"
         )
+        lines.append("")
+    elif report.ai_meta.degraded:
+        reason = report.ai_meta.degraded_reason or "原因未记录"
+        lines.append(f"> AI 降级运行（{reason}），评分完全由规则算出，未经模型调整。")
+        lines.append("")
+    elif report.ai is not None:
+        lines.append("> 评分为规则算分（逐项依据见上表），AI 未调整分数。")
         lines.append("")
     return lines
 
@@ -160,12 +169,89 @@ def _anomalies(report: InspectionReport) -> list[str]:
     return lines
 
 
+# --------------------------------------------------------------------------- 统计
+def _granularity(report: InspectionReport) -> list[str]:
+    """服务维度与集群维度统计。
+
+    只统计未抑制异常：被抑制项与代表它的那条是同一服务同一指标上的同一类问题，
+    计入会让同一个故障被数两遍。
+    """
+    lines = ["## 四、多粒度巡检统计", ""]
+    if not report.service_stats:
+        lines.extend(["本次未生成多粒度统计。", ""])
+        return lines
+
+    active_services = [s for s in report.service_stats if not s.is_healthy]
+    lines.append(
+        f"> 统计对象为**未抑制异常**；影响面 = 该维度下出现异常的实例数 / 实例总数。"
+        f"本次覆盖 {len(report.service_stats)} 个服务（其中 {len(active_services)} 个有异常）、"
+        f"{len(report.cluster_stats)} 个集群。"
+    )
+    lines.append("")
+
+    lines.append("### 服务维度")
+    lines.append("")
+    lines.append("| 服务 | 集群 | 异常数 | 最严重 | 受影响实例 | 影响面 | 主要指标 | 命中规则 |")
+    lines.append("| --- | --- | ---: | --- | --- | ---: | --- | --- |")
+    for stat in report.service_stats:
+        lines.append(
+            f"| {stat.service} "
+            f"| {stat.cluster_label} "
+            f"| {stat.anomaly_count} "
+            f"| {LEVEL_BADGE[stat.max_level.code] if stat.max_level else '—'} "
+            f"| {_instance_cell(stat)} "
+            f"| {_ratio_cell(stat.affected_ratio)} "
+            f"| {stat.worst_metric or '—'} "
+            f"| {'、'.join(stat.rule_ids) if stat.rule_ids else '—'} |"
+        )
+    lines.append("")
+
+    lines.append("### 集群维度")
+    lines.append("")
+    lines.append("| 集群 | 服务数 | 异常服务 | 异常数 | 最严重 | 受影响实例 | 影响面 | 根因簇 |")
+    lines.append("| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |")
+    for cluster in report.cluster_stats:
+        lines.append(
+            f"| {cluster.label} "
+            f"| {cluster.service_count} "
+            f"| {cluster.affected_service_count} "
+            f"| {cluster.anomaly_count} "
+            f"| {LEVEL_BADGE[cluster.max_level.code] if cluster.max_level else '—'} "
+            f"| {cluster.affected_instances} / {cluster.total_instances} "
+            f"| {_ratio_cell(cluster.affected_ratio)} "
+            f"| {cluster.root_cause_count} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _instance_cell(stat) -> str:  # noqa: ANN001
+    if not stat.total_instances:
+        return "—"
+    shown = "、".join(stat.affected_instances) if stat.affected_instances else "—"
+    return f"{shown}（{len(stat.affected_instances)} / {stat.total_instances}）"
+
+
+def _ratio_cell(ratio: float | None) -> str:
+    return "—" if ratio is None else f"{ratio:.0%}"
+
+
 # --------------------------------------------------------------------------- 根因
 def _clusters(report: InspectionReport) -> list[str]:
-    lines = ["## 四、根因分析", ""]
+    lines = ["## 五、根因分析", ""]
     if not report.clusters:
         lines.extend(["未形成根因簇。", ""])
         return lines
+
+    active = [a for a in report.anomalies if not a.is_suppressed]
+    suppressed = len(report.anomalies) - len(active)
+    coverage = (
+        f"> 本次 {len(active)} 条未抑制异常全部归入 {len(report.clusters)} 个根因簇，逐簇给出根因。"
+    )
+    if suppressed:
+        coverage += f"另有 {suppressed} 条被抑制异常不单独归因（见异常清单折叠区）。"
+    lines.append(coverage)
+    lines.append("")
 
     for cluster in report.clusters:
         finding = report.ai.finding_for(cluster.cluster_id) if report.ai else None
@@ -218,7 +304,7 @@ def _clusters(report: InspectionReport) -> list[str]:
 
 # --------------------------------------------------------------------------- 建议
 def _suggestions(report: InspectionReport) -> list[str]:
-    lines = ["## 五、修复建议", ""]
+    lines = ["## 六、修复建议", ""]
     if report.ai is None or not report.ai.findings:
         lines.extend(["本次无需要处置的异常。", ""])
         return lines
@@ -250,7 +336,7 @@ def _suggestions(report: InspectionReport) -> list[str]:
 
 # --------------------------------------------------------------------------- 趋势
 def _trend(report: InspectionReport) -> list[str]:
-    lines = ["## 六、稳定性趋势", ""]
+    lines = ["## 七、稳定性趋势", ""]
     comparison = report.comparison
     if comparison is None:
         lines.extend(["本次为首次巡检，暂无可对比的历史记录。", ""])
@@ -287,7 +373,7 @@ def _trend(report: InspectionReport) -> list[str]:
 
 # --------------------------------------------------------------------------- 附录
 def _appendix(report: InspectionReport) -> list[str]:
-    lines = ["## 七、附录", ""]
+    lines = ["## 八、附录", ""]
 
     lines.append("### 数据质量")
     lines.append("")

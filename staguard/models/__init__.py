@@ -37,9 +37,12 @@ from .run import (
     StageRecord,
     StageStatus,
 )
-from .topology import ServiceNode, Topology
+from .statistics import ClusterStat, ServiceStat
+from .topology import DEFAULT_CLUSTER, DEFAULT_CLUSTER_LABEL, ServiceNode, Topology
 
 __all__ = [
+    "DEFAULT_CLUSTER",
+    "DEFAULT_CLUSTER_LABEL",
     "MAD_TO_SIGMA",
     "METRIC_LABEL",
     "METRIC_UNIT",
@@ -55,6 +58,7 @@ __all__ = [
     "BaselineSet",
     "ChangeEvent",
     "ChangeType",
+    "ClusterStat",
     "Confidence",
     "DataQualityIssue",
     "DataQualityReport",
@@ -72,6 +76,7 @@ __all__ = [
     "ScoreResult",
     "ScoreSnapshot",
     "ServiceNode",
+    "ServiceStat",
     "Severity",
     "StageRecord",
     "StageStatus",

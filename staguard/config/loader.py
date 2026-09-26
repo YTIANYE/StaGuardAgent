@@ -84,9 +84,17 @@ def build_settings(config_dir: Path | None = None, **app_overrides: Any) -> Sett
 
     raw = {key: load_yaml(directory / filename) for key, filename in CONFIG_FILES.items()}
 
+    services = ServicesConfig(**raw["services"])
+    dangling = services.undefined_clusters()
+    if dangling:
+        detail = "；".join(f"{name}({cluster})" for name, cluster in dangling)
+        raise ConfigError(
+            f"服务引用了未定义的集群，请在 services.yaml 顶层 clusters 里补上或改正：{detail}"
+        )
+
     return Settings(
         app=app,
-        services=ServicesConfig(**raw["services"]),
+        services=services,
         thresholds=ThresholdConfig(**raw["thresholds"]),
         rules=RulesConfig(**raw["rules"]),
         scoring=ScoringConfig(**raw["scoring"]),

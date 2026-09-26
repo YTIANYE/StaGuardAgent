@@ -10,6 +10,11 @@ from collections import deque
 
 from pydantic import BaseModel, Field
 
+DEFAULT_CLUSTER = "default"
+"""未在配置里显式分组的服务归入这个保留集群键。"""
+
+DEFAULT_CLUSTER_LABEL = "未分组"
+
 
 class ServiceNode(BaseModel):
     """一个服务（或外部依赖）。"""
@@ -24,6 +29,8 @@ class ServiceNode(BaseModel):
     """下游依赖列表（本服务调用它们）。"""
     owner: str | None = None
     description: str | None = None
+    cluster: str = DEFAULT_CLUSTER
+    """所属集群键，用于「集群维度」统计。"""
 
     @property
     def instance_count(self) -> int:
@@ -32,6 +39,8 @@ class ServiceNode(BaseModel):
 
 class Topology(BaseModel):
     services: dict[str, ServiceNode] = Field(default_factory=dict)
+    cluster_labels: dict[str, str] = Field(default_factory=dict)
+    """集群键 -> 展示名，来自 `services.yaml` 顶层的 `clusters`。"""
 
     def node(self, name: str) -> ServiceNode | None:
         return self.services.get(name)
@@ -97,6 +106,24 @@ class Topology(BaseModel):
     def criticality_of(self, service: str) -> float:
         node = self.services.get(service)
         return node.criticality if node else 0.5
+
+    # ------------------------------------------------------------------ 集群维度
+    def cluster_of(self, service: str) -> str:
+        node = self.services.get(service)
+        return node.cluster if node else DEFAULT_CLUSTER
+
+    def cluster_label(self, cluster: str) -> str:
+        """集群展示名。未在配置里给名字时退回键本身，`default` 显示为「未分组」。"""
+        if cluster in self.cluster_labels:
+            return self.cluster_labels[cluster]
+        return DEFAULT_CLUSTER_LABEL if cluster == DEFAULT_CLUSTER else cluster
+
+    def cluster_members(self) -> dict[str, list[str]]:
+        """{集群键: [服务名]}，服务名按字典序。"""
+        groups: dict[str, list[str]] = {}
+        for node in self.services.values():
+            groups.setdefault(node.cluster, []).append(node.name)
+        return {key: sorted(names) for key, names in groups.items()}
 
     def blast_radius(self, service: str) -> list[str]:
         """爆炸半径：受影响的上游服务（可能被连带打挂的那些）。"""
