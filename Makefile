@@ -44,7 +44,7 @@ sample: ## 导出报告样例到 docs/samples（文件名按 AI 模式区分，�
 test: ## 全量测试（含端到端，首次约 30s）
 	$(PY) -m pytest tests/ -q
 
-test-fast: ## 只跑单元测试（毫秒级，改规则时用）
+test-fast: ## 只跑单元测试（秒级，改规则时用）
 	$(PY) -m pytest tests/ -q -m "not slow"
 
 lint: ## 静态检查

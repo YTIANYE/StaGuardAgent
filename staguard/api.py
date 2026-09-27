@@ -178,7 +178,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return {"run_id": run_id, "score": stored["score"], "payload": stored["payload"]}
         return PlainTextResponse(stored["markdown"], media_type="text/markdown; charset=utf-8")
 
-    @app.get("/api/v1/scenarios", summary="可用场景与一键演示清单")
+    @app.get("/api/v1/scenarios", summary="可用场景与一键巡检清单")
     def list_scenarios() -> dict[str, Any]:
         return {
             "dataset_end": settings.scenarios.dataset_end,

@@ -90,7 +90,7 @@ docs/              设计文档、规则设计、AI 集成方案、数据结构�
 docs/samples/      报告样例：同一场景的规则兜底版与真实大模型版并存
 reports/           巡检运行产物：每次 run 写出的 Markdown 报告（文件名含 run_id）
 logs/              运行日志：staguard.log（JSON，10MB × 5 轮转）
-tests/             单元测试（毫秒级）+ 端到端测试
+tests/             单元测试（秒级）+ 端到端测试
 ```
 
 ## 核心能力
@@ -118,7 +118,7 @@ make run-all       # 依次巡检全部场景
 make eval          # 归因评测：根因命中率 / 级别命中率 / 误报率
 make sample        # 导出报告样例到 docs/samples（按 AI 模式区分文件名）
 make test          # 全量测试
-make test-fast     # 只跑单元测试（毫秒级）
+make test-fast     # 只跑单元测试（秒级）
 make monitor       # 启动模拟监控接口（后台常驻）
 make serve         # 启动巡检 API（含 /healthz /readyz /metrics）
 make schedule      # 常驻定时巡检
