@@ -25,8 +25,8 @@ spec:
   schedule: "*/15 * * * *"
   timezone: "Asia/Shanghai"
   concurrencyPolicy: Forbid
-  """上一次还没跑完就跳过本次：巡检是「当前状态快照」，
-  并发跑多次只会产生多份互不一致的报告，还可能与调度器抢占数据库写入。"""
+  # 上一次还没跑完就跳过本次：巡检是「当前状态快照」，
+  # 并发跑多次只会产生多份互不一致的报告，还可能与调度器抢占数据库写入。
   startingDeadlineSeconds: 300
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
