@@ -6,7 +6,7 @@
 
 - **巡检窗口**：2026-09-25 09:30~10:00（30分钟），粒度 60s
 - **覆盖范围**：8 个服务 / 15 个实例
-- **执行耗时**：5.2s
+- **执行耗时**：4.9s
 
 ### 稳定性评分
 
@@ -108,33 +108,25 @@
 
 ## 七、稳定性趋势
 
-**对比对象**：`run-20260925-100000-S1`（2026-09-27T01:51+08:00）
+**对比对象**：`run-20260925-100000-S6`（2026-09-27T03:17+08:00）
 
-- 评分变化：**+76.0 分**（较上次上升）
-- 稳定性评分较上次上升 76.0 分；新增异常 1 项、已恢复 59 项、持续未解决 0 项。
+- 评分变化：**+51.4 分**（较上次上升）
+- 稳定性评分较上次上升 51.4 分；新增异常 1 项、已恢复 4 项、持续未解决 0 项。
 
 **新增异常（1）**
 
 - [P4 轻微] order-svc/order-svc-1 内存使用率
 
-**已恢复（59）**
+**已恢复（4）**
 
-- bank-channel/bank-channel-0 success_rate
-- gateway/gateway-0 success_rate
-- gateway/gateway-1 success_rate
-- gateway/gateway-2 success_rate
-- order-svc/order-svc-0 success_rate
-- order-svc/order-svc-1 success_rate
-- order-svc/order-svc-2 success_rate
-- payment-svc/payment-svc-0 success_rate
-- payment-svc/payment-svc-1 success_rate
-- payment-svc/payment-svc-0 business_error_rate
-- payment-svc/payment-svc-1 business_error_rate
-- gateway/payment-svc success_rate
+- payment-svc/payment-svc-0 mem_usage
+- payment-svc/payment-svc-1 mem_usage
+- payment-svc/payment-svc-0 mem_usage
+- payment-svc/payment-svc-1 mem_usage
 
 ### 评分历史
 
-`▃▄▆▃▃▁█`　最近 7 次：45 → 60 → 84 → 45 → 45 → 20 → 96
+`▁▃▃▄▆▃█`　最近 7 次：20 → 45 → 45 → 60 → 84 → 45 → 96
 
 ## 八、附录
 
@@ -165,14 +157,14 @@
 
 | 阶段 | 状态 | 耗时 | 说明 |
 | --- | --- | ---: | --- |
-| 数据采集 | 成功 | 712ms | file 通道采集 215676 个点 / 150 条时序（707ms） |
-| 标准化清洗 | 成功 | 2563ms | 215999 个有效点 / 150 条时序；缺失率 0.00%，置信度 高 |
-| 结构化存储 | 成功 | 240ms | 数据集 S0 就绪（215999 个指标点） |
-| 动态基线 | 成功 | 1486ms | 计算 150 条基线，动态基线覆盖率 100%（归档 603894 点） |
-| 规则巡检 | 成功 | 156ms | 16 条规则命中 1 项原始发现（156ms） |
-| 聚合去重 | 成功 | 4ms | 1 条异常（抑制 0 条）聚成 1 个根因簇；多粒度统计 8 个服务 / 5 个集群 |
+| 数据采集 | 成功 | 704ms | file 通道采集 215676 个点 / 150 条时序（700ms） |
+| 标准化清洗 | 成功 | 2648ms | 215999 个有效点 / 150 条时序；缺失率 0.00%，置信度 高 |
+| 结构化存储 | 成功 | 143ms | 数据集 S0 就绪（215999 个指标点） |
+| 动态基线 | 成功 | 1284ms | 计算 150 条基线，动态基线覆盖率 100%（归档 603894 点） |
+| 规则巡检 | 成功 | 117ms | 16 条规则命中 1 项原始发现（117ms） |
+| 聚合去重 | 成功 | 3ms | 1 条异常（抑制 0 条）聚成 1 个根因簇；多粒度统计 8 个服务 / 5 个集群 |
 | 稳定性评分 | 成功 | 0ms | 规则算分 96.4（A 优秀） |
-| AI 智能分析 | 降级 | 4ms | 降级运行（配置中已关闭 AI 分析（STAGUARD_LLM_ENABLED=false））；1 条根因结论，toke… |
-| 报告输出 | 成功 | 5ms | Markdown 报告 4779 字符，已写入 run-20260925-100000-S0.md |
+| AI 智能分析 | 降级 | 3ms | 降级运行（配置中已关闭 AI 分析（STAGUARD_LLM_ENABLED=false））；1 条根因结论，toke… |
+| 报告输出 | 成功 | 4ms | Markdown 报告 4463 字符，已写入 run-20260925-100000-S0.md |
 
-- AI 分析：降级运行（配置中已关闭 AI 分析（STAGUARD_LLM_ENABLED=false））；调用 0 次，耗时 0ms，token 0，提示词版本 v1
+- AI 分析：降级运行（配置中已关闭 AI 分析（STAGUARD_LLM_ENABLED=false））；调用 0 次，耗时 0ms，token 0，提示词版本 v2
