@@ -3,13 +3,16 @@ rem ===========================================================================
 rem  StaGuardAgent - Windows launcher
 rem
 rem  Windows 默认没有 make，这个脚本把常用操作包了一层，等价于 Makefile 的目标。
-rem  用法：run.bat [子命令]，子命令见 run.bat help；不带参数 = 三步跑通
+rem  用法：.\run.bat [子命令]，子命令见 .\run.bat help；不带参数 = 三步跑通
 rem  （建环境装依赖 -> 生成数据集 -> 巡检 S1）。
 rem
 rem  两条实现约定：
 rem    1. 开头把控制台切到 UTF-8，否则 rich 输出的中文与图标会显示成方块；
 rem    2. 一律直接调用 .venv\Scripts\python.exe，既不需要 Activate，
 rem       也不受 PowerShell 执行策略（ExecutionPolicy）限制。
+rem
+rem  注意调用时要带 .\ 前缀：PowerShell 不执行当前目录下的可执行文件，
+rem  直接敲 run.bat 会报「无法将"run.bat"项识别为 cmdlet」。
 rem ===========================================================================
 chcp 65001 >nul
 setlocal
@@ -33,7 +36,7 @@ if /i "%CMD%"=="schedule" goto :schedule
 if /i "%CMD%"=="clean"    goto :clean
 if /i "%CMD%"=="help"     goto :usage
 
-echo 未知子命令："%CMD%"。可用命令见 run.bat help
+echo 未知子命令："%CMD%"。可用命令见 .\run.bat help
 exit /b 2
 
 rem ------------------------------------------------------------------ 三步跑通
@@ -138,17 +141,17 @@ rem ------------------------------------------------------------------ 帮助
 :usage
 echo StaGuardAgent Windows 启动脚本（等价于 Makefile 的常用目标）
 echo.
-echo   run.bat              三步跑通：建环境装依赖 + 生成数据集 + 巡检 S1
-echo   run.bat install      只建环境装依赖
-echo   run.bat data         只生成数据集
-echo   run.bat inspect S1   巡检指定场景（默认 S1），第二个参数可给 file 或 http
-echo   run.bat test         全量测试
-echo   run.bat eval         归因评测
-echo   run.bat sample       导出报告样例到 docs\samples
-echo   run.bat monitor      启动模拟监控接口（常驻，Ctrl+C 停止）
-echo   run.bat serve        启动巡检 API（常驻）
-echo   run.bat schedule     常驻定时巡检
-echo   run.bat clean        清理生成物
+echo   .\run.bat              三步跑通：建环境装依赖 + 生成数据集 + 巡检 S1
+echo   .\run.bat install      只建环境装依赖
+echo   .\run.bat data         只生成数据集
+echo   .\run.bat inspect S1   巡检指定场景（默认 S1），第二个参数可给 file 或 http
+echo   .\run.bat test         全量测试
+echo   .\run.bat eval         归因评测
+echo   .\run.bat sample       导出报告样例到 docs\samples
+echo   .\run.bat monitor      启动模拟监控接口（常驻，Ctrl+C 停止）
+echo   .\run.bat serve        启动巡检 API（常驻）
+echo   .\run.bat schedule     常驻定时巡检
+echo   .\run.bat clean        清理生成物
 echo.
 echo 前置：Python 3.11+，安装时勾选 Add python.exe to PATH。
 echo 配大模型 key：copy .env.example .env，填入 STAGUARD_LLM_API_KEY。
