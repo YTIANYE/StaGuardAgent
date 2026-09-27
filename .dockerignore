@@ -1,0 +1,28 @@
+# 只把运行需要的东西送进构建上下文。
+#
+# data/ 里只保留 changes.yaml（变更事件的输入）：数据集由 Dockerfile 里的
+# `python -m staguard gen-data` 在镜像内按固定种子生成。
+# 排除本机生成物有两个收益——构建上下文从 ~500MB 降到几 MB，
+# 且不会把开发者本地的数据库当成代码烤进镜像。
+
+.git
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.codebuddy/
+
+# 本地凭据与运行时产物：不进上下文（.env 里有真实 API key）
+.env
+reports/
+logs/
+
+# 数据集与场景切片：镜像内重新生成
+data/*
+!data/changes.yaml

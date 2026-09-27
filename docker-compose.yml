@@ -58,6 +58,10 @@ services:
       - staguard-data:/app/data
       - ./reports:/app/reports
       - ./logs:/app/logs
+    # 调度器不监听任何端口，沿用镜像里探 /healthz:8080 的 HEALTHCHECK 会让它永远
+    # 显示 unhealthy——被淹没的告警比没有告警更糟。它的健康看日志与告警推送。
+    healthcheck:
+      disable: true
     depends_on:
       monitor:
         condition: service_healthy

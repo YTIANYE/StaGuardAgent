@@ -1,7 +1,7 @@
 """运行期配置（环境变量 / .env）。
 
 约定：所有配置项都可以用 `STAGUARD_` 前缀的环境变量覆盖，默认值保证「零配置可跑」。
-路径类配置默认锚定项目根目录，避免从不同工作目录启动时行为不一致。
+路径类配置默认锚定项目根目录（见 `PROJECT_ROOT`），避免从不同工作目录启动时行为不一致。
 """
 
 from __future__ import annotations
@@ -12,7 +12,27 @@ from typing import Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_SOURCE_ROOT = Path(__file__).resolve().parents[2]
+"""源码位置往上两级。两种安装形态下含义不同，所以还要再判一次（见 `_resolve_project_root`）。"""
+
+
+def _resolve_project_root(source_root: Path) -> Path:
+    """定位项目根目录。**必须同时适配两种安装形态**：
+
+    - **源码 / editable 安装**（`pip install -e .`，开发与 `make` 走这条）：
+      `parents[2]` 就是仓库根目录，`pyproject.toml` 在旁边，直接用它；
+    - **装进 site-packages**（容器镜像、`pip install staguard` 走这条）：
+      `parents[2]` 会变成 `.../site-packages`，那里既没有 `data/` 也没有 `config/`，
+      写权限也没有——早期版本直接拿它当项目根，容器一起步就死在
+      `PermissionError: .../site-packages/data`，而且报错位置与真实原因隔了一层。
+      此时退回**当前工作目录**：镜像里 `WORKDIR /app`，`data/`、`config/`、`reports/`、
+      `logs/` 都在那一层，默认路径自然落到 `/app` 下，不需要在 Dockerfile 和 K8s
+      ConfigMap 里把四个路径逐个重复声明一遍。
+    """
+    return source_root if (source_root / "pyproject.toml").is_file() else Path.cwd()
+
+
+PROJECT_ROOT = _resolve_project_root(_SOURCE_ROOT)
 
 
 class AppConfig(BaseSettings):
