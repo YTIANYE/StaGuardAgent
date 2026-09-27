@@ -22,6 +22,9 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "apscheduler>=3.10,<4",
     "jinja2>=3.1",
+    # Windows 不自带 IANA 时区数据库，而 zoneinfo 需要它（见 staguard/utils/timeutil.py 的 Asia/Shanghai）。
+    # 不声明这一条，Windows 上会一启动就抛 ZoneInfoNotFoundError。macOS/Linux 有系统 tzdata，不需要装。
+    "tzdata>=2024.1; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

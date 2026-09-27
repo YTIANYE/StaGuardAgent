@@ -19,6 +19,9 @@ StaGuardAgent 把这条链路自动化，并且**重点解决两个人工巡检�
 
 ## 快速开始
 
+> **Windows 用户**：仓库根目录的 `run.bat` 是 `make` 的等价物，不需要激活虚拟环境，
+> 用法见 [`docs/07-运行指南.md`](docs/07-运行指南.md)。
+
 ```bash
 # 1. 安装依赖（Python 3.11+）
 make install                     # 或 pip install -e ".[dev]"
@@ -91,6 +94,7 @@ docs/samples/      报告样例：同一场景的规则兜底版与真实大模�
 reports/           巡检运行产物：每次 run 写出的 Markdown 报告（文件名含 run_id）
 logs/              运行日志：staguard.log（JSON，10MB × 5 轮转）
 tests/             单元测试（秒级）+ 端到端测试
+run.bat            Windows 启动脚本：make 的等价物（见 docs/07-运行指南.md）
 ```
 
 ## 核心能力
@@ -178,3 +182,4 @@ AI 负责归因和给建议（它的强项），不负责打分（需要一致�
 | [`docs/03-AI集成方案.md`](docs/03-AI集成方案.md) | 证据包结构、提示词全文、输出 schema、校验与修复、降级兜底、归因评测 |
 | [`docs/04-数据结构.md`](docs/04-数据结构.md) | ER 图、领域模型、表结构要点、配置数据结构 |
 | [`docs/05-运行与效果验证.md`](docs/05-运行与效果验证.md) | 运行步骤、各场景预期输出、工程特性验证、设计要点速查 |
+| [`docs/07-运行指南.md`](docs/07-运行指南.md) | 三步跑通（macOS/Linux 用 `make`、Windows 用 `run.bat`）、配大模型 key、Docker、常见问题 |
